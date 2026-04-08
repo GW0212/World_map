@@ -163,15 +163,14 @@
 
     const baseLayers = {
       satellite: initialBaseLayer,
-      roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-        maximumLevel: 20,
-        credit: 'CARTO / OpenStreetMap',
+      roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.OpenStreetMapImageryProvider({
+        url: 'https://tile.openstreetmap.org/',
+        maximumLevel: 19,
+        credit: 'OpenStreetMap contributors',
       }), 0),
-      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
-        maximumLevel: 17,
-        credit: 'OpenTopoMap / OpenStreetMap',
+      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.ArcGisMapServerImageryProvider({
+        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer',
+        enablePickFeatures: false,
       }), 0),
     };
 
@@ -195,9 +194,10 @@
         active.gamma = 0.96;
         active.saturation = 1.04;
       } else if (style === 'terrain') {
-        active.brightness = 1.04;
-        active.contrast = 1.08;
-        active.gamma = 0.98;
+        active.brightness = 1.02;
+        active.contrast = 1.06;
+        active.gamma = 0.99;
+        active.saturation = 1.02;
       }
     }
 
