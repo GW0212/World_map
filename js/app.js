@@ -12,6 +12,7 @@
     pitch: -90,
     roll: 0,
   };
+  const KOREA_SUBWAY_RECT = Cesium.Rectangle.fromDegrees(124.8, 33.0, 131.2, 39.3);
 
   window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/';
 
@@ -74,7 +75,6 @@
     wireStylePicker(styleManager, sharedState);
     wireMiniMap(viewer);
     wireFavorites(viewer, sharedState);
-    wireKoreaSubway(viewer);
     wireMobileGestures(viewer);
 
     scene.requestRender();
@@ -142,11 +142,18 @@
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 19,
       })),
+      railOverlay: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+        maximumLevel: 18,
+        credit: 'OpenRailwayMap / OpenStreetMap',
+      })),
     };
 
     overlays.arcgisLabels.alpha = 1.0;
     overlays.cartoLightLabels.alpha = 0.65;
     overlays.arcgisOverlay.alpha = 0.95;
+    overlays.railOverlay.alpha = 0;
+    overlays.railOverlay.show = false;
     return overlays;
   }
 
@@ -156,9 +163,14 @@
     const baseLayers = {
       satellite: initialBaseLayer,
       roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-        maximumLevel: 19,
-        credit: '© OpenStreetMap contributors',
+        url: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+        maximumLevel: 20,
+        credit: 'CARTO / OpenStreetMap',
+      }), 0),
+      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+        maximumLevel: 17,
+        credit: 'OpenTopoMap / OpenStreetMap',
       }), 0),
     };
 
@@ -181,22 +193,25 @@
         active.contrast = 1.1;
         active.gamma = 0.96;
         active.saturation = 1.04;
-      } else if (style === 'roadmap') {
-        active.brightness = 1.01;
-        active.contrast = 1.03;
-        active.gamma = 1.0;
+      } else if (style === 'terrain') {
+        active.brightness = 1.04;
+        active.contrast = 1.08;
+        active.gamma = 0.98;
       }
     }
 
     function syncOverlayVisibility(style) {
       if (!overlays) return;
       const isSatellite = style === 'satellite';
+      const isSubway = style === 'subway';
       overlays.arcgisLabels.show = isSatellite;
       overlays.arcgisLabels.alpha = isSatellite ? 0.92 : 0;
       overlays.arcgisOverlay.show = isSatellite;
       overlays.arcgisOverlay.alpha = isSatellite ? 0.95 : 0;
       overlays.cartoLightLabels.show = false;
       overlays.cartoLightLabels.alpha = 0;
+      overlays.railOverlay.show = isSubway;
+      overlays.railOverlay.alpha = isSubway ? 0.96 : 0;
       viewer.scene.requestRender();
     }
 
@@ -216,7 +231,7 @@
           syncOverlayVisibility('satellite');
           viewer.scene.requestRender();
         };
-        ['roadmap'].forEach((name) => {
+        ['roadmap', 'terrain'].forEach((name) => {
           const provider = baseLayers[name] && baseLayers[name].imageryProvider;
           if (provider && provider.errorEvent && typeof provider.errorEvent.addEventListener === 'function') {
             provider.errorEvent.addEventListener((error) => {
@@ -227,13 +242,13 @@
         });
       },
       setStyle(style) {
-        const key = baseLayers[style] ? style : DEFAULT_STYLE;
+        const key = style === 'subway' ? 'subway' : (baseLayers[style] ? style : DEFAULT_STYLE);
         Object.entries(baseLayers).forEach(([name, layer]) => {
-          const active = name === key;
+          const active = key === 'subway' ? name === 'roadmap' : name === key;
           layer.show = active;
           layer.alpha = active ? 1 : 0;
         });
-        applyBaseLayerTuning(key);
+        applyBaseLayerTuning(key === 'subway' ? 'roadmap' : key);
         syncOverlayVisibility(key);
         return key;
       },
@@ -732,14 +747,6 @@
     const panelRect = panel.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    if (viewportWidth <= 768) {
-      panel.style.left = '12px';
-      panel.style.right = '12px';
-      panel.style.width = 'calc(100vw - 24px)';
-      panel.style.top = Math.max(12, Math.min(viewportHeight - panelRect.height - 12, buttonRect.top - panelRect.height - 12)) + 'px';
-      panel.style.bottom = 'auto';
-      return;
-    }
     const top = Math.min(
       Math.max(10, buttonRect.top + buttonRect.height / 2 - panelRect.height / 2 + offsetY),
       viewportHeight - panelRect.height - 10,
@@ -749,7 +756,6 @@
     panel.style.left = left + 'px';
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
-    panel.style.width = '';
   }
 
   function wireCurrentLocation(viewer) {
@@ -784,23 +790,30 @@
     function apply(style) {
       sharedState.currentStyle = styleManager.setStyle(style);
       buttons.forEach(item => item.classList.toggle('active', item.dataset.style === sharedState.currentStyle));
+      if (sharedState.currentStyle === 'subway') {
+        viewer.camera.flyTo({
+          destination: KOREA_SUBWAY_RECT,
+          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+          duration: 1.4,
+        });
+      }
     }
 
     function togglePanel() {
       const willOpen = !panel.classList.contains('open');
       panel.classList.toggle('open', willOpen);
       if (willOpen) {
-        requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 8 }));
+        requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 16 }));
       }
     }
 
     btn.addEventListener('click', togglePanel);
     window.addEventListener('resize', () => {
-      if (panel.classList.contains('open')) positionPanelNearButton(panel, btn, { offsetY: 8 });
+      if (panel.classList.contains('open')) positionPanelNearButton(panel, btn, { offsetY: 16 });
     });
     buttons.forEach(item => item.addEventListener('click', () => {
       apply(item.dataset.style);
-      requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 8 }));
+      requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 16 }));
     }));
     apply(sharedState.currentStyle || DEFAULT_STYLE);
   }
@@ -1043,53 +1056,6 @@
     }, Cesium.ScreenSpaceEventType.MIDDLE_CLICK);
 
     renderFavorites();
-  }
-
-
-  function wireKoreaSubway(viewer) {
-    const stations = Array.isArray(window.KOREA_SUBWAY_STATIONS) ? window.KOREA_SUBWAY_STATIONS : [];
-    if (!stations.length) return;
-    const entities = stations.map((station) => viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
-      point: {
-        pixelSize: 6,
-        color: Cesium.Color.fromCssColorString('#2563eb'),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 2,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 90000.0),
-      },
-      label: {
-        text: station.name,
-        font: '12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
-        fillColor: Cesium.Color.WHITE,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
-        outlineWidth: 3,
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -12),
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 90000.0),
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString('rgba(15,23,42,0.72)'),
-        backgroundPadding: new Cesium.Cartesian2(6, 4),
-      },
-      show: false,
-    }));
-
-    function updateVisibility() {
-      const carto = viewer.camera.positionCartographic;
-      if (!carto) return;
-      const lat = Cesium.Math.toDegrees(carto.latitude);
-      const lon = Cesium.Math.toDegrees(carto.longitude);
-      const height = carto.height || 0;
-      const inKorea = lat >= 33 && lat <= 39.8 && lon >= 124 && lon <= 132.5;
-      const visible = inKorea && height <= 90000;
-      entities.forEach((entity) => { entity.show = visible; });
-    }
-
-    viewer.camera.changed.addEventListener(updateVisibility);
-    updateVisibility();
   }
 
   function loadFavorites() {
