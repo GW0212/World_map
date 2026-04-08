@@ -379,6 +379,16 @@
         });
       });
 
+      if (window.WorldSearch && typeof window.WorldSearch.registerSubwayStations === 'function') {
+        window.WorldSearch.registerSubwayStations(mergedStations.map((station) => ({
+          ...station,
+          zoom: 12,
+          countryKo: '대한민국',
+          countryEn: 'Korea',
+          countryCode: 'KR',
+        })));
+      }
+
       mergedStations.forEach((station) => {
         dataSource.entities.add({
           position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
@@ -784,13 +794,15 @@ out geom qt;`;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'r-item';
+        const icon = item.type === 'station' ? '🚉' : item.type === 'country' ? '🌐' : item.isCapital ? '🏛️' : '🏙️';
+        const kind = item.type === 'station' ? '지하철역' : item.type === 'country' ? '나라' : item.isCapital ? '수도' : '도시';
         button.innerHTML = `
-          <span class="r-ico">${item.type === 'country' ? '🌐' : item.isCapital ? '🏛️' : '🏙️'}</span>
+          <span class="r-ico">${icon}</span>
           <span class="r-txt">
             <span class="r-name">${escapeHtml(meta.primary)}</span>
             <span class="r-sub">${escapeHtml(meta.secondary)}</span>
           </span>
-          <span class="r-kind">${item.type === 'country' ? '나라' : item.isCapital ? '수도' : '도시'}</span>
+          <span class="r-kind">${kind}</span>
         `;
         button.addEventListener('click', () => flyToResult(item));
         button.addEventListener('mouseenter', () => setActive(index));
@@ -820,9 +832,10 @@ out geom qt;`;
     function flyToResult(item) {
       const fly = window.WorldSearch.getFlyToOptions(item);
       const safeLat = Cesium.Math.clamp(item.lat, -MAX_VIEW_LATITUDE, MAX_VIEW_LATITUDE);
-      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.7, 12: 0.38 };
-      const zoomKey = Math.max(5, Math.min(12, Number(item.zoom || fly.zoom || (item.type === 'country' ? 6 : 10))));
-      const latSpan = spanByZoom[zoomKey] || (item.type === 'country' ? 12 : 1.2);
+      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.7, 12: 0.18, 13: 0.08 };
+      const defaultZoom = item.type === 'station' ? 12 : (item.type === 'country' ? 6 : 10);
+      const zoomKey = Math.max(5, Math.min(13, Number(item.zoom || fly.zoom || defaultZoom)));
+      const latSpan = spanByZoom[zoomKey] || (item.type === 'country' ? 12 : (item.type === 'station' ? 0.18 : 1.2));
       const lonSpan = latSpan / Math.max(0.35, Math.cos(Cesium.Math.toRadians(safeLat)));
       const rectangle = Cesium.Rectangle.fromDegrees(
         item.lon - lonSpan / 2,
@@ -845,7 +858,9 @@ out geom qt;`;
       sharedState.lastSearchResult = item;
       const label = item.type === 'country'
         ? (item.nameKo || item.nameEn)
-        : (item.nameKo || item.nameEn) + ((item.countryKo || item.countryEn) ? ' · ' + (item.countryKo || item.countryEn) : '');
+        : item.type === 'station'
+          ? (item.nameKo || item.nameEn || item.name) + (((item.line || '') || (item.countryKo || item.countryEn)) ? ' · ' + ([item.line, item.countryKo || item.countryEn].filter(Boolean).join(' · ')) : '')
+          : (item.nameKo || item.nameEn) + ((item.countryKo || item.countryEn) ? ' · ' + (item.countryKo || item.countryEn) : '');
       input.value = label;
       clearBtn.style.display = 'inline-flex';
       results.style.display = 'none';

@@ -2,7 +2,8 @@
   'use strict';
 
   const countries = Array.isArray(window.WORLD_COUNTRIES) ? window.WORLD_COUNTRIES : [];
-  const cities = Array.isArray(window.WORLD_CITIES) ? window.WORLD_CITIES : [];
+  const regions = Array.isArray(window.WORLD_REGIONS) ? window.WORLD_REGIONS : (Array.isArray(window.WORLD_CITIES) ? window.WORLD_CITIES : []);
+  const subwaySeedStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
 
   function stripDiacritics(value) {
     return String(value || '')
@@ -104,7 +105,7 @@
       type: 'city',
     }));
 
-  const indexedCities = cities.map(item => tokenizeEntry({
+  const indexedRegions = regions.map(item => tokenizeEntry({
     ...item,
     type: 'city',
     lat: Number(item.lat),
@@ -113,8 +114,136 @@
     priority: Number(item.priority || (item.isCapital ? 30 : 80)),
   }));
 
-  const allCities = [...indexedCities, ...capitalEntries];
-  const allEntries = [...allCities, ...indexedCountries];
+  const allRegions = [...indexedRegions, ...capitalEntries];
+  const allEntries = [...allRegions, ...indexedCountries];
+  let indexedStations = [];
+  let stationExactMap = new Map();
+  let stationPrefixEntries = [];
+
+  function stationAliases(station) {
+    const base = uniqueStrings([
+      station.nameKo,
+      station.nameEn,
+      station.name,
+      station.line,
+      station.countryKo,
+      station.countryEn,
+      ...(station.aliases || []),
+    ]);
+    const nameOnly = String(station.nameKo || station.nameEn || station.name || '').trim();
+    const cleanName = nameOnly.replace(/역$/u, '').trim();
+    return uniqueStrings([
+      ...base,
+      nameOnly ? nameOnly + '역' : '',
+      cleanName,
+      cleanName ? cleanName + '역' : '',
+      station.line && nameOnly ? station.line + ' ' + nameOnly : '',
+      station.line && cleanName ? station.line + ' ' + cleanName : '',
+      station.line && cleanName ? cleanName + ' ' + station.line : '',
+    ]);
+  }
+
+  function tokenizeStation(entry) {
+    const aliases = stationAliases(entry);
+    return {
+      ...entry,
+      type: 'station',
+      aliases,
+      _denseAliases: uniqueStrings(aliases.map(denseText).filter(Boolean)),
+      _normalizedAliases: uniqueStrings(aliases.map(normalizeText).filter(Boolean)),
+      _nameDense: denseText(entry.nameKo || entry.nameEn || entry.name || ''),
+      _countryDense: denseText(entry.countryKo || entry.countryEn || ''),
+      _labelDense: denseText([entry.nameKo || entry.nameEn || entry.name || '', entry.line || '', entry.countryKo || entry.countryEn || ''].filter(Boolean).join(' ')),
+    };
+  }
+
+
+  function buildStationIndexes() {
+    stationExactMap = new Map();
+    stationPrefixEntries = [];
+    indexedStations.forEach((item) => {
+      const keys = uniqueStrings([
+        stationBaseKey(item.nameKo || item.nameEn || item.name || ''),
+        ...((item.aliases || []).map(stationBaseKey).filter(Boolean)),
+      ]);
+      keys.forEach((key) => {
+        if (!key) return;
+        if (!stationExactMap.has(key)) stationExactMap.set(key, []);
+        stationExactMap.get(key).push(item);
+        stationPrefixEntries.push([key, item]);
+      });
+    });
+    stationPrefixEntries.sort((a, b) => b[0].length - a[0].length);
+  }
+
+  function hydrateStationsFromOverlayCache() {
+    if (indexedStations.length) return;
+    try {
+      const raw = localStorage.getItem('worldmap:korea-subway-overlay:v2');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const stations = Array.isArray(parsed?.data?.stations) ? parsed.data.stations : [];
+      if (!stations.length) return;
+      registerSubwayStations(stations.map((station) => ({
+        nameKo: station.name || station.nameKo || '',
+        nameEn: station.nameEn || '',
+        name: station.name || station.nameKo || '',
+        line: station.line || '',
+        lat: Number(station.lat),
+        lon: Number(station.lon),
+        color: station.color || '',
+        zoom: 12,
+        countryKo: '대한민국',
+        countryEn: 'Korea',
+        countryCode: 'KR',
+        aliases: Array.isArray(station.aliases) ? station.aliases : [],
+      })));
+    } catch (error) {
+      console.warn('subway station cache hydrate failed:', error);
+    }
+  }
+
+  function registerSubwayStations(stations = []) {
+    indexedStations = (Array.isArray(stations) ? stations : [])
+      .filter(item => safeNumber(item.lat) !== null && safeNumber(item.lon) !== null && String(item.name || item.nameKo || item.nameEn || '').trim())
+      .map((item, index) => tokenizeStation({
+        ...item,
+        nameKo: item.nameKo || item.name || '',
+        nameEn: item.nameEn || '',
+        countryKo: item.countryKo || '대한민국',
+        countryEn: item.countryEn || 'Korea',
+        countryCode: item.countryCode || 'KR',
+        lat: Number(item.lat),
+        lon: Number(item.lon),
+        zoom: Number(item.zoom || 12),
+        priority: Number(item.priority || (20 + index)),
+        isCapital: false,
+      }));
+
+    buildStationIndexes();
+
+    if (typeof window.setKrSubwayStations === 'function') {
+      window.setKrSubwayStations(indexedStations.map(item => ({
+        name: item.nameKo || item.nameEn || item.name || '',
+        nameKo: item.nameKo || '',
+        nameEn: item.nameEn || '',
+        line: item.line || '',
+        lat: item.lat,
+        lon: item.lon,
+        zoom: item.zoom || 12,
+        countryKo: item.countryKo || '대한민국',
+        countryEn: item.countryEn || 'Korea',
+        countryCode: item.countryCode || 'KR',
+        aliases: Array.isArray(item.aliases) ? item.aliases.slice() : [],
+      })));
+    }
+  }
+
+  if (subwaySeedStations.length) {
+    registerSubwayStations(subwaySeedStations);
+  } else {
+    hydrateStationsFromOverlayCache();
+  }
 
   const countryAliasMap = new Map();
   const countryCodeMap = new Map();
@@ -299,12 +428,14 @@
   function dedupeResults(items) {
     const map = new Map();
     for (const item of items) {
-      const key = [
-        item.type,
-        denseText(item.nameKo || item.nameEn || ''),
-        denseText(item.countryKo || item.countryEn || ''),
-        item.countryCode || '',
-      ].join('|');
+      const key = item.type === 'station'
+        ? [item.type, stationBaseKey(item.nameKo || item.nameEn || item.name || ''), item.countryCode || ''].join('|')
+        : [
+            item.type,
+            denseText(item.nameKo || item.nameEn || item.name || ''),
+            denseText(item.countryKo || item.countryEn || ''),
+            item.countryCode || '',
+          ].join('|');
       const prev = map.get(key);
       if (!prev || (item._score || 0) > (prev._score || 0)) {
         map.set(key, item);
@@ -363,9 +494,12 @@
 
   function sortResults(a, b) {
     if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
-    if (a.type !== b.type) return a.type === 'city' ? -1 : 1;
+    const typeOrder = { station: 0, city: 1, country: 2 };
+    const aOrder = Object.prototype.hasOwnProperty.call(typeOrder, a.type) ? typeOrder[a.type] : 9;
+    const bOrder = Object.prototype.hasOwnProperty.call(typeOrder, b.type) ? typeOrder[b.type] : 9;
+    if (aOrder !== bOrder) return aOrder - bOrder;
     if (!!b.isCapital !== !!a.isCapital) return b.isCapital ? 1 : -1;
-    return String(a.nameKo || a.nameEn || '').localeCompare(String(b.nameKo || b.nameEn || ''));
+    return String(a.nameKo || a.nameEn || a.name || '').localeCompare(String(b.nameKo || b.nameEn || b.name || ''));
   }
 
   function searchLocal(query, options = {}) {
@@ -402,6 +536,285 @@
     let finalResults = dedupeResults(scored).sort(sortResults);
     finalResults = keepBestPerExactHangulCity(finalResults, profile);
     return finalResults.slice(0, maxResults);
+  }
+
+  function trimStationSuffix(value) {
+    return String(value || '').replace(/역$/u, '').trim();
+  }
+
+
+  function isExplicitStationQuery(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return false;
+    if (/(역|station|subway|metro|rail|railway)$/iu.test(text)) return true;
+    if (/(역\s|station\s|subway\s|metro\s|rail\s|railway\s)/iu.test(text)) return true;
+    return false;
+  }
+
+  function stationBaseKey(value) {
+    return denseText(trimStationSuffix(value));
+  }
+
+  function stationExactMeta(entry, query) {
+    const qBase = stationBaseKey(query);
+    const name = String(entry.nameKo || entry.nameEn || entry.name || '');
+    const base = stationBaseKey(name);
+    const full = denseText(name);
+    const queryDense = denseText(String(query || '').trim());
+    return {
+      exact: !!qBase && (base === qBase || full === queryDense || (base + '역') === queryDense),
+      prefix: !!qBase && !((base === qBase) || (full === queryDense) || ((base + '역') === queryDense)) && (base.startsWith(qBase) || full.startsWith(queryDense))
+    };
+  }
+
+
+  function fastStationSearch(query, limit = 12) {
+    const key = stationBaseKey(query);
+    if (!key || !indexedStations.length) return [];
+    const exact = (stationExactMap.get(key) || []).slice().sort(sortResults);
+    if (exact.length) return dedupeResults(exact).sort(sortResults).slice(0, limit);
+
+    const prefix = [];
+    const seen = new Set();
+    for (const [prefixKey, item] of stationPrefixEntries) {
+      if (!prefixKey.startsWith(key)) continue;
+      const id = stationBaseKey(item.nameKo || item.nameEn || item.name || '') + '|' + (item.countryCode || '');
+      if (seen.has(id)) continue;
+      seen.add(id);
+      prefix.push(item);
+      if (prefix.length >= limit) break;
+    }
+    return dedupeResults(prefix).sort(sortResults).slice(0, limit);
+  }
+
+  function scoreStationEntry(entry, profile) {
+    const queryDense = profile.dense;
+    const queryNorm = profile.normalized;
+    if (!queryDense) return -Infinity;
+
+    const aliasMeta = aliasMatchMeta(entry, queryNorm, queryDense);
+    const lineNorm = normalizeText(entry.line || '');
+    const lineDense = denseText(entry.line || '');
+    const nameRaw = String(entry.nameKo || entry.nameEn || entry.name || '');
+    const nameNorm = normalizeText(nameRaw);
+    const nameDense = denseText(nameRaw);
+    const baseNameNorm = normalizeText(trimStationSuffix(nameRaw));
+    const baseNameDense = denseText(trimStationSuffix(nameRaw));
+    const queryBaseNorm = normalizeText(trimStationSuffix(profile.raw));
+    const queryBaseDense = denseText(trimStationSuffix(profile.raw));
+
+    const exactName = !!queryBaseDense && (baseNameDense === queryBaseDense || nameDense === queryDense || nameNorm === queryNorm);
+    const prefixName = !!queryBaseDense && !exactName && (
+      baseNameDense.startsWith(queryBaseDense) ||
+      nameDense.startsWith(queryDense) ||
+      baseNameNorm.startsWith(queryBaseNorm) ||
+      nameNorm.startsWith(queryNorm)
+    );
+    const containsName = !!queryBaseDense && !exactName && !prefixName && (
+      baseNameDense.includes(queryBaseDense) ||
+      nameDense.includes(queryDense) ||
+      baseNameNorm.includes(queryBaseNorm) ||
+      nameNorm.includes(queryNorm)
+    );
+    const lineMatched = !!lineDense && (
+      queryDense.includes(lineDense) ||
+      queryBaseDense.includes(lineDense) ||
+      lineNorm.includes(queryNorm) ||
+      lineNorm.includes(queryBaseNorm)
+    );
+
+    const hasRealMatch = aliasMeta.level > 0 || exactName || prefixName || containsName || lineMatched;
+    if (!hasRealMatch) return -Infinity;
+
+    let score = 0;
+    score += aliasMeta.level * 1600;
+    if (aliasMeta.exact) score += 4600;
+    if (aliasMeta.prefix) score += 1000;
+    if (exactName) score += 6200;
+    else if (prefixName) score += 3200;
+    else if (containsName) score += 1100;
+
+    if (queryDense.endsWith('역') && (baseNameDense + '역') === queryDense) score += 1200;
+    if (lineMatched) score += exactName ? 900 : 450;
+    if (entry.countryCode === 'KR') score += 220;
+    score -= Number(entry.priority || 0);
+    return score;
+  }
+
+  function searchStations(query, options = {}) {
+    const maxResults = options.maxResults || 8;
+    const profile = getQueryProfile(query);
+    if (!profile.dense) return [];
+    if (!indexedStations.length) hydrateStationsFromOverlayCache();
+    if (!indexedStations.length) return [];
+
+    const queryBaseNorm = normalizeText(trimStationSuffix(profile.raw));
+    const queryBaseDense = denseText(trimStationSuffix(profile.raw));
+    const fastResults = fastStationSearch(query, maxResults);
+    const hasExactFast = fastResults.some(item => stationBaseKey(item.nameKo || item.nameEn || item.name || '') === stationBaseKey(query));
+    if (hasExactFast) {
+      return fastResults.map(item => ({ ...item, _score: 999999, source: 'SUBWAY' })).slice(0, maxResults);
+    }
+
+    let scored = indexedStations
+      .map(entry => ({ ...entry, _score: scoreStationEntry(entry, profile), source: 'SUBWAY' }))
+      .filter(entry => Number.isFinite(entry._score))
+      .sort(sortResults);
+
+    if (profile.denseParts.length === 1) {
+      const strongest = scored.filter(item => {
+        const aliasMeta = aliasMatchMeta(item, profile.normalized, profile.dense);
+        const nameRaw = String(item.nameKo || item.nameEn || item.name || '');
+        const nameNorm = normalizeText(nameRaw);
+        const nameDense = denseText(nameRaw);
+        const baseNameNorm = normalizeText(trimStationSuffix(nameRaw));
+        const baseNameDense = denseText(trimStationSuffix(nameRaw));
+        const exactName = !!queryBaseDense && (baseNameDense === queryBaseDense || nameDense === profile.dense || nameNorm === profile.normalized);
+        const prefixName = !!queryBaseDense && (baseNameDense.startsWith(queryBaseDense) || nameDense.startsWith(profile.dense) || baseNameNorm.startsWith(queryBaseNorm) || nameNorm.startsWith(profile.normalized));
+        return exactName || prefixName || aliasMeta.level >= 5;
+      });
+      if (strongest.length) {
+        scored = strongest;
+      } else {
+        const strong = scored.filter(item => {
+          const aliasMeta = aliasMatchMeta(item, profile.normalized, profile.dense);
+          const nameRaw = String(item.nameKo || item.nameEn || item.name || '');
+          const nameNorm = normalizeText(nameRaw);
+          const nameDense = denseText(nameRaw);
+          const baseNameNorm = normalizeText(trimStationSuffix(nameRaw));
+          const baseNameDense = denseText(trimStationSuffix(nameRaw));
+          return aliasMeta.level >= 4 || nameNorm.includes(profile.normalized) || nameDense.includes(profile.dense) || baseNameNorm.includes(queryBaseNorm) || baseNameDense.includes(queryBaseDense);
+        });
+        if (strong.length) scored = strong;
+      }
+    }
+
+    return dedupeResults(scored).sort(sortResults).slice(0, maxResults);
+  }
+
+  function escapeOverpassRegex(value) {
+    return String(value || '').replace(/[\\.^$|?*+()\[\]{}-]/g, '\\$&');
+  }
+
+  function looksLikeStationQuery(raw, localStationResults = []) {
+    const text = String(raw || '').trim();
+    if (!text) return false;
+    if (/역$/u.test(text)) return true;
+    if (localStationResults.length) return true;
+    const dense = denseText(text);
+    if (!dense) return false;
+    if (/[ㄱ-ㆎ가-힣]/.test(text) && dense.length >= 2 && dense.length <= 12) return true;
+    if (/^[a-zA-Z0-9\s-]{2,20}$/.test(text) && dense.length >= 3 && dense.length <= 18) return true;
+    return false;
+  }
+
+  function normalizeOverpassStationElement(element) {
+    const tags = element && element.tags ? element.tags : {};
+    const lat = Number(element && (element.lat ?? (element.center && element.center.lat)));
+    const lon = Number(element && (element.lon ?? (element.center && element.center.lon)));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const name = tags['name:ko'] || tags.name || tags.official_name || tags['official_name:ko'] || tags['alt_name:ko'] || '';
+    if (!String(name).trim()) return null;
+    return tokenizeStation({
+      nameKo: name,
+      nameEn: tags['name:en'] || '',
+      name,
+      line: tags.line || tags.ref || tags.route_ref || tags.network || tags.operator || '',
+      aliases: uniqueStrings([
+        tags.name,
+        tags['name:ko'],
+        tags['official_name'],
+        tags['official_name:ko'],
+        tags['alt_name'],
+        tags['alt_name:ko'],
+        tags['short_name'],
+        tags['old_name'],
+        tags['loc_name'],
+        tags['railway'],
+        tags['public_transport'],
+        tags['network'],
+      ]),
+      countryKo: '대한민국',
+      countryEn: 'Korea',
+      countryCode: 'KR',
+      lat,
+      lon,
+      zoom: 12,
+      priority: 18,
+      source: 'SUBWAY_REMOTE',
+    });
+  }
+
+  async function searchOverpassStations(query, profile, limit = 10) {
+    const base = trimStationSuffix(query);
+    const escapedBase = escapeOverpassRegex(base);
+    const escapedFull = escapeOverpassRegex(String(query || '').trim());
+    if (!escapedBase && !escapedFull) return [];
+
+    const exactRegex = escapedBase ? `^${escapedBase}(역)?$` : `^${escapedFull}$`;
+    const fuzzyRegex = escapedBase || escapedFull;
+    const overpassQuery = `
+[out:json][timeout:8];
+area["ISO3166-1"="KR"][admin_level=2]->.searchArea;
+(
+  node(area.searchArea)["name"~"${exactRegex}",i]["railway"~"station|halt|stop|tram_stop"];
+  node(area.searchArea)["name"~"${exactRegex}",i]["public_transport"~"station|platform|stop_position"];
+  node(area.searchArea)["name"~"${exactRegex}",i]["station"~"subway|light_rail|monorail|train"];
+  node(area.searchArea)["name"~"${exactRegex}",i]["subway"="yes"];
+  way(area.searchArea)["name"~"${exactRegex}",i]["railway"~"station|halt|stop|tram_stop"];
+  way(area.searchArea)["name"~"${exactRegex}",i]["public_transport"~"station|platform|stop_position"];
+  relation(area.searchArea)["name"~"${exactRegex}",i]["public_transport"~"stop_area|station|stop_area_group"];
+  relation(area.searchArea)["name"~"${exactRegex}",i]["railway"~"station|halt|stop|tram_stop"];
+  relation(area.searchArea)["name"~"${exactRegex}",i]["station"~"subway|light_rail|monorail|train"];
+  node(area.searchArea)["name"~"${fuzzyRegex}",i]["railway"~"station|halt|stop|tram_stop"];
+  node(area.searchArea)["name"~"${fuzzyRegex}",i]["public_transport"~"station|platform|stop_position"];
+  node(area.searchArea)["name"~"${fuzzyRegex}",i]["station"~"subway|light_rail|monorail|train"];
+  node(area.searchArea)["name"~"${fuzzyRegex}",i]["subway"="yes"];
+  way(area.searchArea)["name"~"${fuzzyRegex}",i]["railway"~"station|halt|stop|tram_stop"];
+  way(area.searchArea)["name"~"${fuzzyRegex}",i]["public_transport"~"station|platform|stop_position"];
+  relation(area.searchArea)["name"~"${fuzzyRegex}",i]["public_transport"~"stop_area|station|stop_area_group"];
+  relation(area.searchArea)["name"~"${fuzzyRegex}",i]["railway"~"station|halt|stop|tram_stop"];
+  relation(area.searchArea)["name"~"${fuzzyRegex}",i]["station"~"subway|light_rail|monorail|train"];
+);
+out center tags;`;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1800);
+      const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        body: 'data=' + encodeURIComponent(overpassQuery),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) return [];
+      const raw = await response.json();
+      const elements = Array.isArray(raw && raw.elements) ? raw.elements : [];
+      const mapped = elements
+        .map(normalizeOverpassStationElement)
+        .filter(Boolean)
+        .map(entry => {
+          const exactMeta = stationExactMeta(entry, query);
+          const scoreBoost = exactMeta.exact ? 2600 : exactMeta.prefix ? 900 : 250;
+          return { ...entry, _score: scoreStationEntry(entry, profile) + 900 + scoreBoost, source: 'SUBWAY_REMOTE' };
+        })
+        .filter(entry => Number.isFinite(entry._score));
+
+      const exactNameKey = denseText(base || query);
+      let deduped = dedupeResults(mapped).sort(sortResults);
+      if (exactNameKey) {
+        const exactOnly = deduped.filter(item => {
+          const itemKey = denseText(trimStationSuffix(item.nameKo || item.nameEn || item.name || ''));
+          return itemKey === exactNameKey;
+        });
+        if (exactOnly.length) deduped = [...exactOnly, ...deduped.filter(item => !exactOnly.includes(item))];
+      }
+      return deduped.slice(0, limit);
+    } catch (error) {
+      console.warn('Overpass station search failed:', error);
+      return [];
+    }
   }
 
   function inferCountryFromText(value) {
@@ -472,11 +885,34 @@
 
     const typeRaw = String(item.type || '').toLowerCase();
     const clsRaw = String(item.class || '').toLowerCase();
+    const firstName = item.name || addr.city || addr.town || addr.village || addr.state || addr.country || String(item.display_name || '').split(',')[0].trim();
+    const looksStation = ['railway', 'public_transport'].includes(clsRaw) || /(station|halt|stop|subway|tram|metro)/i.test(typeRaw) || /역$/u.test(String(firstName || ''));
+
+    if (looksStation) {
+      const station = tokenizeStation({
+        nameKo: firstName,
+        nameEn: '',
+        name: firstName,
+        line: addr.railway || addr.suburb || '',
+        aliases: uniqueStrings([item.name, addr.railway, addr.suburb, addr.neighbourhood, addr.quarter]),
+        countryKo: explicitCountry?.nameKo || '대한민국',
+        countryEn: explicitCountry?.nameEn || addr.country || 'Korea',
+        countryCode: countryCode || 'KR',
+        lat,
+        lon,
+        zoom: 12,
+        priority: 26,
+      });
+      station._score = scoreStationEntry(station, queryProfile) + 420;
+      if (!Number.isFinite(station._score)) return null;
+      return station;
+    }
+
     const isCountry = typeRaw === 'country' || clsRaw === 'boundary';
     const mapped = tokenizeEntry({
       type: isCountry ? 'country' : 'city',
       nameKo: '',
-      nameEn: item.name || addr.city || addr.town || addr.village || addr.state || addr.country || String(item.display_name || '').split(',')[0].trim(),
+      nameEn: firstName,
       countryKo: explicitCountry?.nameKo || '',
       countryEn: explicitCountry?.nameEn || addr.country || '',
       countryCode,
@@ -553,45 +989,76 @@
   async function searchPlaces(query, options = {}) {
     const maxResults = options.maxResults || 10;
     const profile = getQueryProfile(query);
-    const localResults = searchLocal(query, { maxResults: Math.max(maxResults, 12) });
+    const explicitStationQuery = isExplicitStationQuery(query);
+    const stationResults = searchStations(query, { maxResults: Math.max(12, maxResults) });
+    const localResults = explicitStationQuery ? [] : searchLocal(query, { maxResults: Math.max(maxResults, 12) });
 
-    const topLocalScore = localResults[0]?._score || 0;
-    const topIsExactCity = !!localResults[0] && localResults[0].type === 'city' && cityNameMatchMeta(localResults[0], normalizeText(profile.parts[0] || profile.raw), profile.denseWithoutCountries[0] || profile.dense).exact;
-    const hasStrongLocal = topLocalScore >= 5000 || topIsExactCity || localResults.length >= Math.min(5, maxResults);
-    const needsRemote = options.forceRemote || (!hasStrongLocal && localResults.length < Math.min(4, maxResults));
-
-    if (!needsRemote) {
-      return localResults.slice(0, maxResults);
+    const exactLocalStations = stationResults.filter(item => stationBaseKey(item.nameKo || item.nameEn || item.name || '') === stationBaseKey(query));
+    if (explicitStationQuery && exactLocalStations.length) {
+      return dedupeResults(exactLocalStations).sort(sortResults).slice(0, maxResults);
     }
 
-    const [nominatimResults, arcgisResults] = await Promise.all([
-      searchNominatim(query, profile, 6),
-      searchArcGis(query, profile, 6),
-    ]);
+    const shouldTryRemoteStations = looksLikeStationQuery(query, stationResults) || explicitStationQuery;
+    let remoteStationResults = [];
+    let nominatimResults = [];
+    let arcgisResults = [];
 
-    let merged = dedupeResults([...localResults, ...nominatimResults, ...arcgisResults]).sort(sortResults);
+    const tasks = [];
+    if (shouldTryRemoteStations && stationResults.length < maxResults) tasks.push(searchOverpassStations(query, profile, Math.max(10, maxResults)));
+    else tasks.push(Promise.resolve([]));
+
+    if (!explicitStationQuery) {
+      tasks.push(searchNominatim(query, profile, shouldTryRemoteStations ? 8 : 6), searchArcGis(query, profile, 6));
+    } else {
+      tasks.push(Promise.resolve([]), Promise.resolve([]));
+    }
+    [remoteStationResults, nominatimResults, arcgisResults] = await Promise.all(tasks);
+
+    let merged = dedupeResults([...remoteStationResults, ...stationResults, ...localResults, ...nominatimResults, ...arcgisResults]).sort(sortResults);
     merged = keepBestPerExactHangulCity(merged, profile);
+
+    const queryStationBase = stationBaseKey(query);
+    const exactStations = merged.filter(item => item.type === 'station' && stationBaseKey(item.nameKo || item.nameEn || item.name || '') === queryStationBase);
+    if (exactStations.length) {
+      const others = merged.filter(item => !(item.type === 'station' && stationBaseKey(item.nameKo || item.nameEn || item.name || '') === queryStationBase));
+      merged = [...exactStations, ...others];
+    }
+
+    if (explicitStationQuery) {
+      const stationOnly = dedupeResults(merged.filter(item => item.type === 'station')).sort(sortResults);
+      if (stationOnly.length) {
+        const exactOnly = stationOnly.filter(item => stationBaseKey(item.nameKo || item.nameEn || item.name || '') === queryStationBase);
+        return (exactOnly.length ? exactOnly : stationOnly).slice(0, maxResults);
+      }
+      return [];
+    }
+
+    const topExactStation = merged.find(item => item.type === 'station' && (item._nameDense === profile.dense || (item._nameDense + '역') === profile.dense || denseText(trimStationSuffix(item.nameKo || item.nameEn || item.name || '')) === denseText(trimStationSuffix(query))));
+    if (topExactStation) {
+      const nameKey = denseText(trimStationSuffix(topExactStation.nameKo || topExactStation.nameEn || topExactStation.name || ''));
+      const exactStations2 = merged.filter(item => item.type === 'station' && denseText(trimStationSuffix(item.nameKo || item.nameEn || item.name || '')) === nameKey);
+      const others = merged.filter(item => !(item.type === 'station' && denseText(trimStationSuffix(item.nameKo || item.nameEn || item.name || '')) === nameKey));
+      merged = [...exactStations2, ...others];
+    }
 
     const q = queryCityNorm(profile);
     const exactRemote = merged.filter(item => item.type === 'city' && cityNameMatchMeta(item, q.norm, q.dense).exact);
-    if (exactRemote.length) {
+    if (!stationResults.length && !remoteStationResults.length && exactRemote.length) {
       const exactNames = new Set(exactRemote.map(item => item._nameDense));
-      merged = merged.filter(item => item.type === 'city' && exactNames.has(item._nameDense));
-    } else if (profile.denseParts.length === 1) {
-      const strongRemote = merged.filter(item => {
-        const cm = item.type === 'city' ? cityNameMatchMeta(item, q.norm, q.dense) : cityNameMatchMeta(item, profile.normalized, profile.dense);
-        const am = aliasMatchMeta(item, q.norm, q.dense);
-        return cm.level >= 4 || am.level >= 4;
-      });
-      if (strongRemote.length) merged = strongRemote;
+      merged = merged.filter(item => item.type !== 'city' || exactNames.has(item._nameDense));
     }
 
-    merged = keepBestPerExactHangulCity(merged.sort(sortResults), profile);
     return merged.slice(0, maxResults);
   }
 
   function getResultLabel(item) {
-    const primary = item.nameKo || item.nameEn;
+    const primary = item.nameKo || item.nameEn || item.name;
+    if (item.type === 'station') {
+      return {
+        primary: primary + (String(primary || '').endsWith('역') ? '' : '역'),
+        secondary: [item.line || '지하철역', item.countryKo || item.countryEn || '대한민국'].filter(Boolean).join(' · '),
+      };
+    }
     const enName = item.nameKo && item.nameEn ? item.nameEn : '';
     const country = item.type === 'country'
       ? [item.nameKo && item.nameEn ? item.nameEn : '', item.code || item.countryCode].filter(Boolean).join(' · ')
@@ -604,6 +1071,7 @@
   }
 
   function getFlyToOptions(item) {
+    if (item.type === 'station') return { altitude: 3200, pitch: -90, zoom: 12 };
     if (item.type === 'country') return { altitude: 2400000, pitch: -90, zoom: 6 };
     if (item.isCapital) return { altitude: 95000, pitch: -90, zoom: 10 };
     if (item.zoom >= 11) return { altitude: 60000, pitch: -90, zoom: item.zoom };
@@ -635,7 +1103,7 @@
   function findNearestCityWithDistance(lat, lon, maxDistanceKm = 180, countryCode = '') {
     let best = null;
     let bestDistance = Infinity;
-    for (const item of allCities) {
+    for (const item of allRegions) {
       if (countryCode && item.countryCode && item.countryCode !== countryCode) continue;
       const dist = haversineKm(lat, lon, Number(item.lat), Number(item.lon));
       if (dist < bestDistance) {
@@ -920,7 +1388,7 @@
     if (!normalized) return null;
     let best = null;
     let bestScore = -1;
-    for (const item of allCities) {
+    for (const item of allRegions) {
       if (countryCode && item.countryCode && item.countryCode !== countryCode) continue;
       const candidates = [item.nameKo, item.nameEn].concat(item.aliases || []).filter(Boolean);
       for (const candidate of candidates) {
@@ -1088,7 +1556,9 @@
 
   window.WorldSearch = {
     countries: indexedCountries,
-    cities: allCities,
+    regions: allRegions,
+    cities: allRegions,
+    get stations() { return indexedStations; },
     normalizeText,
     denseText,
     searchLocal,
@@ -1096,5 +1566,6 @@
     getResultLabel,
     getFlyToOptions,
     reverseGeocode,
+    registerSubwayStations,
   };
 }());
