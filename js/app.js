@@ -12,7 +12,7 @@
     pitch: -90,
     roll: 0,
   };
-  const KOREA_SUBWAY_RECT = Cesium.Rectangle.fromDegrees(124.8, 33.0, 131.2, 39.3);
+  const KOREA_RECT = Cesium.Rectangle.fromDegrees(124.8, 33.0, 131.2, 39.3);
 
   window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/';
 
@@ -143,18 +143,18 @@
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 19,
       })),
-      railOverlay: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+      koreaTransitOverlay: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tile.memomaps.de/tilegen/{z}/{x}/{y}.png',
         maximumLevel: 18,
-        credit: 'OpenRailwayMap / OpenStreetMap',
+        credit: 'ÖPNVKarte / OpenStreetMap',
       })),
     };
 
     overlays.arcgisLabels.alpha = 1.0;
     overlays.cartoLightLabels.alpha = 0.65;
     overlays.arcgisOverlay.alpha = 0.95;
-    overlays.railOverlay.alpha = 0;
-    overlays.railOverlay.show = false;
+    overlays.koreaTransitOverlay.alpha = 0;
+    overlays.koreaTransitOverlay.show = false;
     return overlays;
   }
 
@@ -163,14 +163,10 @@
 
     const baseLayers = {
       satellite: initialBaseLayer,
-      roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.OpenStreetMapImageryProvider({
-        url: 'https://tile.openstreetmap.org/',
+      roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
         maximumLevel: 19,
-        credit: 'OpenStreetMap contributors',
-      }), 0),
-      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.ArcGisMapServerImageryProvider({
-        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer',
-        enablePickFeatures: false,
+        credit: 'OpenStreetMap',
       }), 0),
     };
 
@@ -193,26 +189,39 @@
         active.contrast = 1.1;
         active.gamma = 0.96;
         active.saturation = 1.04;
-      } else if (style === 'terrain') {
-        active.brightness = 1.02;
-        active.contrast = 1.06;
-        active.gamma = 0.99;
-        active.saturation = 1.02;
+      } else if (style === 'roadmap') {
+        active.brightness = 1.0;
+        active.contrast = 1.02;
+        active.gamma = 1.0;
       }
+    }
+
+    let currentStyle = DEFAULT_STYLE;
+
+    function isKoreaVisible() {
+      const rect = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
+      if (!rect) return false;
+      return Cesium.Rectangle.simpleIntersection(rect, KOREA_RECT) !== undefined;
+    }
+
+    function shouldShowKoreaTransit() {
+      const zoom = altToZoom(viewer.camera.positionCartographic.height || HOME_VIEW.alt);
+      return currentStyle === 'roadmap' && isKoreaVisible() && zoom >= 8;
     }
 
     function syncOverlayVisibility(style) {
       if (!overlays) return;
+      currentStyle = style;
       const isSatellite = style === 'satellite';
-      const isSubway = style === 'subway';
       overlays.arcgisLabels.show = isSatellite;
       overlays.arcgisLabels.alpha = isSatellite ? 0.92 : 0;
       overlays.arcgisOverlay.show = isSatellite;
       overlays.arcgisOverlay.alpha = isSatellite ? 0.95 : 0;
-      overlays.cartoLightLabels.show = false;
-      overlays.cartoLightLabels.alpha = 0;
-      overlays.railOverlay.show = false;
-      overlays.railOverlay.alpha = 0;
+      overlays.cartoLightLabels.show = style === 'roadmap';
+      overlays.cartoLightLabels.alpha = style === 'roadmap' ? 0.88 : 0;
+      const showTransit = shouldShowKoreaTransit();
+      overlays.koreaTransitOverlay.show = showTransit;
+      overlays.koreaTransitOverlay.alpha = showTransit ? 0.95 : 0;
       viewer.scene.requestRender();
     }
 
@@ -232,7 +241,7 @@
           syncOverlayVisibility('satellite');
           viewer.scene.requestRender();
         };
-        ['roadmap', 'terrain'].forEach((name) => {
+        ['roadmap'].forEach((name) => {
           const provider = baseLayers[name] && baseLayers[name].imageryProvider;
           if (provider && provider.errorEvent && typeof provider.errorEvent.addEventListener === 'function') {
             provider.errorEvent.addEventListener((error) => {
@@ -243,18 +252,19 @@
         });
       },
       setStyle(style) {
-        const key = style === 'subway' ? 'subway' : (baseLayers[style] ? style : DEFAULT_STYLE);
+        const key = baseLayers[style] ? style : DEFAULT_STYLE;
         Object.entries(baseLayers).forEach(([name, layer]) => {
-          const active = key === 'subway' ? name === 'roadmap' : name === key;
+          const active = name === key;
           layer.show = active;
           layer.alpha = active ? 1 : 0;
         });
-        applyBaseLayerTuning(key === 'subway' ? 'roadmap' : key);
+        applyBaseLayerTuning(key);
         syncOverlayVisibility(key);
         return key;
       },
     };
     manager.wireProviderRecovery();
+    viewer.camera.moveEnd.addEventListener(() => syncOverlayVisibility(currentStyle));
     return manager;
   }
 
@@ -739,12 +749,6 @@
     });
   }
 
-  function wireSubwayOverlay(style) {
-    const overlay = document.getElementById('subway-overlay');
-    if (!overlay) return;
-    overlay.classList.toggle('active', style === 'subway');
-    overlay.setAttribute('aria-hidden', style === 'subway' ? 'false' : 'true');
-  }
 
   function readViewFromHash() {
     if (!location.hash) return null;
@@ -814,15 +818,7 @@
 
     function apply(style) {
       sharedState.currentStyle = styleManager.setStyle(style);
-      wireSubwayOverlay(sharedState.currentStyle);
       buttons.forEach(item => item.classList.toggle('active', item.dataset.style === sharedState.currentStyle));
-      if (sharedState.currentStyle === 'subway') {
-        viewer.camera.flyTo({
-          destination: KOREA_SUBWAY_RECT,
-          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-          duration: 1.4,
-        });
-      }
     }
 
     function togglePanel() {
