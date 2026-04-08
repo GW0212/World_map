@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>World Map</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link href="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    body { color: #fff; }
+    #cesiumContainer { width: 100vw; height: 100vh; }
+    .cesium-credit-container, .cesium-widget-credits, .cesium-credit-expand-link { display: none !important; }
+    button, input, select { font: inherit; }
+
+    #loading {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 50% 38%, #10233e 0%, #05101e 45%, #02060d 100%);
+      transition: opacity .7s ease;
+    }
+    #loading.out { opacity: 0; pointer-events: none; }
+    #loading.gone { display: none; }
+    .ld-globe {
+      width: 110px; height: 110px; border-radius: 50%;
+      background: url('earth-loading.png') center/cover no-repeat;
+      box-shadow: 0 0 36px rgba(70,150,255,.28), inset -18px -18px 32px rgba(0,0,0,.28);
+      position: relative;
+    }
+    .ld-globe::before {
+      content: ''; position: absolute; inset: -16px; border-radius: 50%;
+      border: 1px solid rgba(140,200,255,.22);
+      border-top-color: rgba(180,220,255,.85);
+      animation: spin 1.8s linear infinite;
+    }
+    .ld-globe::after {
+      content: ''; position: absolute; inset: -24px; border-radius: 50%;
+      border: 1px solid rgba(90,160,255,.18);
+      border-right-color: rgba(120,185,255,.55);
+      animation: spin 3.1s linear infinite reverse;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .ld-title { margin-top: 28px; font-size: 18px; font-weight: 700; color: #fff; }
+    .ld-sub { margin-top: 6px; font-size: 12px; color: rgba(166,202,245,.72); }
+    .ld-dots { margin-top: 20px; display: flex; gap: 7px; }
+    .ld-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(80,160,255,.65); animation: dp 1.2s ease-in-out infinite; }
+    .ld-dot:nth-child(2) { animation-delay: .18s; }
+    .ld-dot:nth-child(3) { animation-delay: .36s; }
+    @keyframes dp { 0%,80%,100% { opacity: .3; transform: scale(.7); } 40% { opacity: 1; transform: scale(1.3); } }
+
+    #search-wrap { position: fixed; top: 16px; left: 16px; z-index: 300; }
+    #search-row {
+      display: flex; align-items: center;
+      min-height: 52px; border-radius: 28px; overflow: hidden;
+      background: rgba(255,255,255,.97); box-shadow: 0 12px 30px rgba(0,0,0,.35);
+      backdrop-filter: blur(10px);
+    }
+    #search-row.has-results { border-radius: 18px 18px 0 0; }
+    #srch-btn, .tool-circle {
+      width: 52px; height: 52px; border: 0; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; background: linear-gradient(180deg, #2563eb, #1d4ed8);
+      box-shadow: 0 10px 24px rgba(0,0,0,.28);
+    }
+    #srch-btn svg, .tool-circle svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2.3; }
+    #srch-panel {
+      max-width: 0; opacity: 0; overflow: hidden;
+      display: flex; align-items: center; gap: 8px;
+      transition: max-width .25s ease, opacity .2s ease;
+    }
+    #srch-panel.is-open { max-width: 430px; opacity: 1; }
+    #srch-input {
+      width: 280px; border: 0; outline: none; background: transparent;
+      color: #0f172a; font-size: 14px; font-weight: 600; padding: 15px 0 15px 14px;
+    }
+    #srch-input::placeholder { color: #94a3b8; font-weight: 500; }
+    #srch-clear {
+      display: none; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border: 0; border-radius: 999px;
+      background: #e2e8f0; color: #475569; cursor: pointer; margin-right: 8px;
+    }
+    #srch-meta { min-width: 54px; padding-right: 12px; color: #64748b; font-size: 11px; font-weight: 700; }
+    #srch-results {
+      display: none; width: 100%; max-width: 472px; max-height: 360px; overflow-y: auto;
+      background: rgba(255,255,255,.98); color: #0f172a; border-radius: 0 0 18px 18px;
+      box-shadow: 0 14px 34px rgba(0,0,0,.35);
+    }
+    .r-item {
+      width: 100%; border: 0; background: transparent; text-align: left; cursor: pointer;
+      display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+      border-bottom: 1px solid #edf2f7;
+    }
+    .r-item:hover, .r-item.act { background: #eff6ff; }
+    .r-ico { font-size: 18px; flex: 0 0 24px; }
+    .r-txt { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .r-name { font-size: 14px; font-weight: 700; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .r-sub { margin-top: 2px; font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .r-kind { flex: 0 0 auto; font-size: 10px; font-weight: 800; color: #2563eb; background: #dbeafe; border-radius: 999px; padding: 5px 8px; }
+    .r-msg { padding: 14px 16px; font-size: 13px; color: #64748b; }
+
+    #title {
+      position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 20; pointer-events: none;
+      font-size: 11px; font-weight: 700; letter-spacing: 8px; text-transform: uppercase; color: rgba(255,255,255,.4);
+    }
+    #info-bar {
+      position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20;
+      display: flex; overflow: hidden; border-radius: 14px;
+      background: rgba(255,255,255,.94); box-shadow: 0 14px 30px rgba(0,0,0,.28);
+      backdrop-filter: blur(10px);
+    }
+    .ib {
+      min-width: 84px; padding: 10px 14px; border-right: 1px solid #e5e7eb;
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+    }
+    .ib:last-child { border-right: 0; }
+    .ib-l { font-size: 10px; color: #94a3b8; font-weight: 700; letter-spacing: 1px; }
+    .ib-v { font-size: 12px; color: #0f172a; font-weight: 800; }
+
+    #zoom-ind {
+      position: fixed; right: 16px; top: 50%; transform: translateY(-50%); z-index: 20;
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+    }
+    .zi-l { writing-mode: vertical-lr; transform: rotate(180deg); font-size: 8px; letter-spacing: 2px; color: rgba(255,255,255,.35); }
+    .zi-track { width: 4px; height: 120px; background: rgba(255,255,255,.16); border-radius: 999px; overflow: hidden; }
+    #zi-fill { width: 100%; height: 0; background: linear-gradient(to top, rgba(96,165,250,.95), rgba(191,219,254,.5)); transition: height .2s ease; }
+    #zi-val { font-size: 10px; font-weight: 800; color: rgba(255,255,255,.5); }
+
+    #globe-home-btn {
+      position: fixed; right: 18px; bottom: 18px; z-index: 25;
+      width: 54px; height: 54px; border: none; border-radius: 50%; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(24, 38, 67, 0.92);
+      box-shadow: 0 10px 24px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.12);
+      backdrop-filter: blur(8px);
+      transition: transform .16s ease, background .16s ease, box-shadow .16s ease;
+    }
+    #globe-home-btn img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; box-shadow: 0 0 10px rgba(75,145,255,.25); }
+
+    .tool-stack { position: fixed; right: 18px; bottom: 88px; z-index: 31; display: flex; flex-direction: column; gap: 10px; }
+    .tool-circle {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: rgba(24, 38, 67, 0.92);
+      backdrop-filter: blur(8px);
+    }
+    .tool-circle:hover, #globe-home-btn:hover { transform: translateY(-1px) scale(1.03); background: rgba(33,54,94,.96); }
+    .tool-panel {
+      position: fixed; right: 74px; background: rgba(15,23,42,.94); color: #e5eefc;
+      border-radius: 16px; box-shadow: 0 16px 38px rgba(0,0,0,.35); backdrop-filter: blur(10px);
+      width: 320px; padding: 14px; z-index: 34; display: none;
+    }
+    .tool-panel.open { display: block; }
+    .panel-title { font-size: 13px; font-weight: 800; margin-bottom: 10px; }
+    .panel-desc { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
+    .fav-grid { display: grid; gap: 8px; }
+    .fav-grid input { width: 100%; border: 1px solid rgba(148,163,184,.24); background: rgba(255,255,255,.06); color: #fff; border-radius: 10px; padding: 10px 11px; outline: none; }
+    .fav-grid input::placeholder { color: #94a3b8; }
+    .fav-actions-top { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .fav-actions-top button, .style-option, .copy-btn {
+      border: 0; border-radius: 10px; cursor: pointer; padding: 10px 11px; font-weight: 700;
+      color: #fff; background: linear-gradient(180deg, #2563eb, #1d4ed8);
+    }
+    .copy-btn { width: 100%; margin-top: 8px; }
+    .fav-list { display: grid; gap: 8px; margin-top: 12px; max-height: 240px; overflow-y: auto; }
+    .fav-item { display: flex; gap: 10px; justify-content: space-between; align-items: center; background: rgba(255,255,255,.06); border-radius: 12px; padding: 10px; }
+    .fav-name { font-weight: 800; font-size: 13px; }
+    .fav-sub { margin-top: 4px; color: #94a3b8; font-size: 11px; }
+    .fav-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .fav-actions button { border: 0; border-radius: 8px; padding: 7px 8px; cursor: pointer; background: rgba(255,255,255,.1); color: #fff; font-size: 11px; }
+    .fav-empty { color: #94a3b8; font-size: 12px; padding: 8px 2px; }
+    #favorites-panel { width: 320px; }
+    #style-panel { width: 220px; }
+    .style-options { display: grid; gap: 8px; }
+    .style-option { background: rgba(255,255,255,.08); text-align: left; }
+    .style-option.active { background: linear-gradient(180deg, #2563eb, #1d4ed8); }
+
+    #minimap {
+      position: fixed; right: 16px; top: 120px; z-index: 24;
+      width: 150px; background: rgba(15,23,42,.86); border-radius: 16px; padding: 10px;
+      box-shadow: 0 14px 30px rgba(0,0,0,.3); backdrop-filter: blur(8px);
+    }
+    #minimap-label { font-size: 11px; color: #cbd5e1; margin-bottom: 8px; font-weight: 700; }
+    #minimap-canvas { width: 120px; height: 120px; display: block; margin: 0 auto; }
+
+    #mouse-info {
+      position: fixed; z-index: 40; display: none; pointer-events: none;
+      min-width: 210px; padding: 10px 12px; border-radius: 12px;
+      background: rgba(15, 23, 42, 0.92); color: #e5eefc;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35); backdrop-filter: blur(8px);
+    }
+    #mouse-info .mi-row { display: flex; gap: 8px; justify-content: space-between; font-size: 11px; }
+    #mouse-info .mi-k { color: #94a3b8; font-weight: 700; }
+    #mouse-info .mi-v { color: #f8fafc; font-weight: 800; }
+
+    #toast {
+      position: fixed; left: 50%; top: 88px; transform: translateX(-50%) translateY(-10px);
+      z-index: 500; background: rgba(15,23,42,.94); color: #fff; border-radius: 999px;
+      padding: 10px 14px; font-size: 12px; font-weight: 700; box-shadow: 0 12px 30px rgba(0,0,0,.32);
+      opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 768px) {
+      #search-wrap { left: 10px; right: 10px; top: 10px; }
+      #search-row { width: fit-content; max-width: calc(100vw - 20px); }
+      #srch-panel.is-open { max-width: calc(100vw - 72px); }
+      #srch-input { width: min(220px, calc(100vw - 170px)); }
+      #srch-results { max-width: calc(100vw - 20px); }
+      #title { top: 72px; font-size: 10px; letter-spacing: 6px; }
+      #info-bar { bottom: 10px; width: calc(100vw - 20px); }
+      .ib { min-width: 0; flex: 1 1 0; padding: 9px 6px; }
+      .ib-l { font-size: 9px; }
+      .ib-v { font-size: 11px; }
+      #zoom-ind { right: 10px; }
+      #globe-home-btn { right: 10px; bottom: 12px; width: 50px; height: 50px; }
+      #globe-home-btn img { width: 26px; height: 26px; }
+      .tool-stack { right: 10px; bottom: 72px; gap: 8px; }
+      .tool-circle { width: 44px; height: 44px; }
+      .tool-panel { right: 10px; left: 10px; width: auto; max-width: none; }
+      #favorites-panel { width: 300px; }
+      #style-panel { width: 220px; }
+      #minimap { right: 10px; top: 126px; width: 118px; padding: 8px; }
+      #minimap-label { font-size: 10px; margin-bottom: 6px; }
+      #mouse-info { display: none !important; }
+      #toast { top: 70px; width: calc(100vw - 32px); text-align: center; border-radius: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="ld-globe"></div>
+    <div class="ld-title">World Map</div>
+    <div class="ld-sub">ESRI World Imagery 연결 중...</div>
+    <div class="ld-dots"><div class="ld-dot"></div><div class="ld-dot"></div><div class="ld-dot"></div></div>
+  </div>
+
+  <div id="cesiumContainer"></div>
+  <div id="toast">링크가 복사되었습니다.</div>
+
+  <div id="mouse-info">
+    <div class="mi-row"><span class="mi-k">위치</span><span class="mi-v" id="mi-place">위치 확인 중...</span></div>
+  </div>
+
+  <div id="search-wrap">
+    <div id="search-row">
+      <button id="srch-btn" aria-expanded="false" title="검색 열기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="22" y2="22"></line></svg>
+      </button>
+      <div id="srch-panel">
+        <input id="srch-input" type="text" placeholder="나라, 수도, 주요 도시를 검색하세요" autocomplete="off" spellcheck="false">
+        <button id="srch-clear" type="button" title="검색어 지우기">✕</button>
+        <div id="srch-meta"><span id="srch-count">0건</span></div>
+      </div>
+    </div>
+    <div id="srch-results"></div>
+  </div>
+
+  <div id="title">World Map</div>
+
+  <div id="minimap">
+    <div id="minimap-label">전세계 위치</div>
+    <canvas id="minimap-canvas" width="120" height="120"></canvas>
+  </div>
+
+  <div id="info-bar">
+    <div class="ib"><span class="ib-l">위도</span><span class="ib-v" id="ib-lat">—</span></div>
+    <div class="ib"><span class="ib-l">경도</span><span class="ib-v" id="ib-lon">—</span></div>
+    <div class="ib"><span class="ib-l">고도</span><span class="ib-v" id="ib-alt">—</span></div>
+    <div class="ib"><span class="ib-l">줌</span><span class="ib-v" id="ib-zoom">—</span></div>
+    <div class="ib"><span class="ib-l">검색</span><span class="ib-v">LOCAL</span></div>
+  </div>
+
+  <div id="zoom-ind">
+    <div class="zi-l">zoom</div>
+    <div class="zi-track"><div id="zi-fill"></div></div>
+    <div id="zi-val">—</div>
+  </div>
+
+  <div class="tool-stack">
+    <button id="copy-link-btn" class="tool-circle" type="button" title="현재 화면 링크 복사">
+      <svg viewBox="0 0 24 24"><path d="M10 14L21 3"></path><path d="M15 3h6v6"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>
+    </button>
+    <button id="my-location-btn" class="tool-circle" type="button" title="내 위치로 이동">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path><circle cx="12" cy="12" r="9"></circle></svg>
+    </button>
+    <button id="style-toggle-btn" class="tool-circle" type="button" title="지도 스타일 전환">
+      <svg viewBox="0 0 24 24"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21 1 6"></polygon><line x1="8" y1="3" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="21"></line></svg>
+    </button>
+    <button id="favorites-toggle-btn" class="tool-circle" type="button" title="즐겨찾기 위치">
+      <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+    </button>
+  </div>
+
+  <div id="style-panel" class="tool-panel">
+    <div class="panel-title">지도 스타일</div>
+    <div class="panel-desc">위성 / 일반 / 지형 / 야간 모드를 전환할 수 있습니다.</div>
+    <div class="style-options">
+      <button type="button" class="style-option" data-style="satellite">위성</button>
+      <button type="button" class="style-option" data-style="roadmap">일반 지도</button>
+      <button type="button" class="style-option" data-style="terrain">지형</button>
+      <button type="button" class="style-option" data-style="night">야간</button>
+    </div>
+  </div>
+
+  <div id="favorites-panel" class="tool-panel">
+    <div class="panel-title">즐겨찾기 · 위치 저장</div>
+    <div class="panel-desc">현재 보고 있는 위치를 저장하거나, 위도/경도 또는 우편번호로 직접 추가할 수 있습니다.</div>
+    <input type="hidden" id="fav-edit-id">
+    <div class="fav-grid">
+      <input id="fav-name" type="text" placeholder="예: 서울시청 / 집 / 회사 / 면접장">
+      <input id="fav-coords" type="text" placeholder="직접 좌표 추가: 위도, 경도">
+      <input id="fav-postal" type="text" placeholder="또는 우편번호 입력">
+      <div class="fav-actions-top">
+        <button id="fav-add-current" type="button">현재 위치 저장</button>
+        <button id="fav-add-manual" type="button">직접 추가/수정</button>
+      </div>
+    </div>
+    <div id="favorites-list" class="fav-list"></div>
+  </div>
+
+  <button id="globe-home-btn" type="button" aria-label="홈 화면으로 이동" title="지구 보기"><img src="earth-loading.png" alt="지구"></button>
+
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Cesium.js"></script>
+  <script src="data/countries.js"></script>
+  <script src="data/cities.js"></script>
+  <script src="js/search-engine.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
