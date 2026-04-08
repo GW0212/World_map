@@ -143,18 +143,28 @@
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 19,
       })),
-      koreaTransitOverlay: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://tile.memomaps.de/tilegen/{z}/{x}/{y}.png',
-        maximumLevel: 18,
-        credit: 'ÖPNVKarte / OpenStreetMap',
-      })),
+      koreaTransitOverlay: null,
+      ensureKoreaTransitOverlay() {
+        if (this.koreaTransitOverlay) return this.koreaTransitOverlay;
+        try {
+          this.koreaTransitOverlay = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+            url: 'https://tile.memomaps.de/tilegen/{z}/{x}/{y}.png',
+            maximumLevel: 18,
+            credit: 'ÖPNVKarte / OpenStreetMap',
+          }));
+          this.koreaTransitOverlay.alpha = 0;
+          this.koreaTransitOverlay.show = false;
+        } catch (error) {
+          console.warn('korea transit overlay init failed:', error);
+          this.koreaTransitOverlay = null;
+        }
+        return this.koreaTransitOverlay;
+      },
     };
 
     overlays.arcgisLabels.alpha = 1.0;
     overlays.cartoLightLabels.alpha = 0.65;
     overlays.arcgisOverlay.alpha = 0.95;
-    overlays.koreaTransitOverlay.alpha = 0;
-    overlays.koreaTransitOverlay.show = false;
     return overlays;
   }
 
@@ -220,8 +230,11 @@
       overlays.cartoLightLabels.show = style === 'roadmap';
       overlays.cartoLightLabels.alpha = style === 'roadmap' ? 0.88 : 0;
       const showTransit = shouldShowKoreaTransit();
-      overlays.koreaTransitOverlay.show = showTransit;
-      overlays.koreaTransitOverlay.alpha = showTransit ? 0.95 : 0;
+      const transit = showTransit ? overlays.ensureKoreaTransitOverlay() : overlays.koreaTransitOverlay;
+      if (transit) {
+        transit.show = showTransit;
+        transit.alpha = showTransit ? 0.95 : 0;
+      }
       viewer.scene.requestRender();
     }
 
@@ -309,13 +322,31 @@
     const loading = document.getElementById('loading');
     let dismissed = false;
     function dismiss() {
-      if (dismissed) return;
+      if (dismissed || !loading) return;
       dismissed = true;
       loading.classList.add('out');
       setTimeout(() => loading.classList.add('gone'), 700);
     }
+
+    let renderCount = 0;
+    const onPostRender = () => {
+      renderCount += 1;
+      if (renderCount >= 2) {
+        dismiss();
+        if (scene.postRender && typeof scene.postRender.removeEventListener === 'function') {
+          scene.postRender.removeEventListener(onPostRender);
+        }
+      }
+    };
+
+    scene.postRender.addEventListener(onPostRender);
     scene.globe.tileLoadProgressEvent.addEventListener(count => { if (count === 0) dismiss(); });
-    setTimeout(dismiss, 4500);
+    scene.renderError.addEventListener((error) => {
+      console.warn('scene render error:', error);
+      dismiss();
+    });
+    window.addEventListener('error', dismiss, { once: true });
+    setTimeout(dismiss, 2200);
   }
 
   function wireInfoBar(viewer, sharedState) {
