@@ -12,13 +12,11 @@
     pitch: -90,
     roll: 0,
   };
-  const KOREA_RECT = Cesium.Rectangle.fromDegrees(124.8, 33.0, 131.2, 39.3);
 
   window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/';
 
   function boot() {
-    try {
-      Cesium.Ion.defaultAccessToken = undefined;
+    Cesium.Ion.defaultAccessToken = undefined;
 
     const creditSink = document.createElement('div');
     creditSink.style.display = 'none';
@@ -29,7 +27,9 @@
     const baseLayer = viewer.imageryLayers.get(0);
     const styleManager = createStyleManager(viewer, baseLayer);
     const overlays = createOverlayLayers(viewer);
+    const koreaSubwayOverlay = createKoreaSubwayOverlay(viewer);
     styleManager.attachOverlays(overlays);
+    styleManager.attachKoreaSubwayOverlay(koreaSubwayOverlay);
 
     configureScene(viewer);
 
@@ -80,12 +80,6 @@
     wireMobileGestures(viewer);
 
     scene.requestRender();
-    } catch (error) {
-      console.error('World Map boot failed:', error);
-      if (typeof window.__dismissWorldMapLoading === 'function') {
-        window.__dismissWorldMapLoading('지도 표시 준비 중...');
-      }
-    }
   }
 
   function createViewer(creditSink) {
@@ -150,40 +144,35 @@
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 19,
       })),
-      koreaTransitOverlay: null,
-      ensureKoreaTransitOverlay() {
-        if (this.koreaTransitOverlay) return this.koreaTransitOverlay;
-        try {
-          this.koreaTransitOverlay = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-            url: 'https://tile.memomaps.de/tilegen/{z}/{x}/{y}.png',
-            maximumLevel: 18,
-            credit: 'ÖPNVKarte / OpenStreetMap',
-          }));
-          this.koreaTransitOverlay.alpha = 0;
-          this.koreaTransitOverlay.show = false;
-        } catch (error) {
-          console.warn('korea transit overlay init failed:', error);
-          this.koreaTransitOverlay = null;
-        }
-        return this.koreaTransitOverlay;
-      },
+      railOverlay: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+        maximumLevel: 18,
+        credit: 'OpenRailwayMap / OpenStreetMap',
+      })),
     };
 
     overlays.arcgisLabels.alpha = 1.0;
     overlays.cartoLightLabels.alpha = 0.65;
     overlays.arcgisOverlay.alpha = 0.95;
+    overlays.railOverlay.alpha = 0;
+    overlays.railOverlay.show = false;
     return overlays;
   }
 
   function createStyleManager(viewer, initialBaseLayer) {
     let overlays = null;
+    let koreaSubwayOverlay = null;
 
     const baseLayers = {
       satellite: initialBaseLayer,
       roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-        maximumLevel: 19,
-        credit: 'OpenStreetMap',
+        url: 'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
+        maximumLevel: 20,
+        credit: 'CARTO / OpenStreetMap contributors',
+      }), 0),
+      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.ArcGisMapServerImageryProvider({
+        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer',
+        enablePickFeatures: false,
       }), 0),
     };
 
@@ -206,48 +195,37 @@
         active.contrast = 1.1;
         active.gamma = 0.96;
         active.saturation = 1.04;
-      } else if (style === 'roadmap') {
-        active.brightness = 1.0;
-        active.contrast = 1.02;
-        active.gamma = 1.0;
+      } else if (style === 'terrain') {
+        active.brightness = 1.02;
+        active.contrast = 1.06;
+        active.gamma = 0.99;
+        active.saturation = 1.02;
       }
-    }
-
-    let currentStyle = DEFAULT_STYLE;
-
-    function isKoreaVisible() {
-      const rect = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
-      if (!rect) return false;
-      return Cesium.Rectangle.simpleIntersection(rect, KOREA_RECT) !== undefined;
-    }
-
-    function shouldShowKoreaTransit() {
-      const zoom = altToZoom(viewer.camera.positionCartographic.height || HOME_VIEW.alt);
-      return currentStyle === 'roadmap' && isKoreaVisible() && zoom >= 8;
     }
 
     function syncOverlayVisibility(style) {
       if (!overlays) return;
-      currentStyle = style;
       const isSatellite = style === 'satellite';
       overlays.arcgisLabels.show = isSatellite;
       overlays.arcgisLabels.alpha = isSatellite ? 0.92 : 0;
       overlays.arcgisOverlay.show = isSatellite;
       overlays.arcgisOverlay.alpha = isSatellite ? 0.95 : 0;
-      overlays.cartoLightLabels.show = style === 'roadmap';
-      overlays.cartoLightLabels.alpha = style === 'roadmap' ? 0.88 : 0;
-      const showTransit = shouldShowKoreaTransit();
-      const transit = showTransit ? overlays.ensureKoreaTransitOverlay() : overlays.koreaTransitOverlay;
-      if (transit) {
-        transit.show = showTransit;
-        transit.alpha = showTransit ? 0.95 : 0;
-      }
+      const isRoadmap = style === 'roadmap';
+      overlays.cartoLightLabels.show = isRoadmap;
+      overlays.cartoLightLabels.alpha = isRoadmap ? 0.82 : 0;
+      overlays.railOverlay.show = false;
+      overlays.railOverlay.alpha = 0;
+      if (koreaSubwayOverlay) koreaSubwayOverlay.setVisible(style === 'roadmap');
       viewer.scene.requestRender();
     }
 
     const manager = {
       attachOverlays(value) {
         overlays = value;
+        syncOverlayVisibility(DEFAULT_STYLE);
+      },
+      attachKoreaSubwayOverlay(value) {
+        koreaSubwayOverlay = value;
         syncOverlayVisibility(DEFAULT_STYLE);
       },
       wireProviderRecovery() {
@@ -261,7 +239,7 @@
           syncOverlayVisibility('satellite');
           viewer.scene.requestRender();
         };
-        ['roadmap'].forEach((name) => {
+        ['roadmap', 'terrain'].forEach((name) => {
           const provider = baseLayers[name] && baseLayers[name].imageryProvider;
           if (provider && provider.errorEvent && typeof provider.errorEvent.addEventListener === 'function') {
             provider.errorEvent.addEventListener((error) => {
@@ -284,8 +262,253 @@
       },
     };
     manager.wireProviderRecovery();
-    viewer.camera.moveEnd.addEventListener(() => syncOverlayVisibility(currentStyle));
     return manager;
+  }
+
+  function createKoreaSubwayOverlay(viewer) {
+    const DATA_URL = 'https://overpass-api.de/api/interpreter';
+    const CACHE_KEY = 'worldmap:korea-subway-overlay:v2';
+    const CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
+    const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
+    dataSource.show = false;
+    viewer.dataSources.add(dataSource);
+
+    const lineColorMap = {
+      '1호선': '#0D3692', '2호선': '#33A23D', '3호선': '#FE5B10', '4호선': '#32A1C8',
+      '5호선': '#8B50A4', '6호선': '#C55C1D', '7호선': '#54640D', '8호선': '#F14C82',
+      '9호선': '#BDB092', '공항철도': '#0090D2', '공항철도선': '#0090D2', '신분당선': '#D31145',
+      '수인분당선': '#F5A200', '수인·분당선': '#F5A200', '경의중앙선': '#77C4A3', '경춘선': '#0C8E72',
+      '서해선': '#8FC31F', '신림선': '#6789CA', '우이신설선': '#B7C452', '김포골드라인': '#A17800',
+      '의정부경전철': '#FDA600', '에버라인': '#6FB245', '인천1호선': '#7CA8D5', '인천2호선': '#ED8B00',
+      '부산1호선': '#F06A00', '부산2호선': '#81BF48', '부산3호선': '#BB8C00', '부산4호선': '#2D9EDB',
+      '동해선': '#0054A6', '대구1호선': '#D93F5C', '대구2호선': '#00A84D', '대구3호선': '#F4A116',
+      '대전1호선': '#007448', '광주1호선': '#0090D2', 'GTX-A': '#9B6B43'
+    };
+
+    function resolveColor(tags = {}) {
+      const candidates = [tags.colour, tags.color, tags['line:colour'], tags.ref, tags.name, tags.route];
+      for (const value of candidates) {
+        if (!value) continue;
+        const items = String(value).split(/[\/,|]/).map(v => v.trim()).filter(Boolean);
+        for (const item of items) {
+          if (/^#?[0-9a-fA-F]{6}$/.test(item)) return item.startsWith('#') ? item : '#' + item;
+          if (lineColorMap[item]) return lineColorMap[item];
+          const compact = item.replace(/\s+/g, '');
+          if (lineColorMap[compact]) return lineColorMap[compact];
+        }
+      }
+      return '#4B8BFF';
+    }
+
+    function resolveLineName(tags = {}) {
+      return tags.name || tags.ref || tags.line || tags.route || '지하철';
+    }
+
+    function parseCached() {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const cached = JSON.parse(raw);
+        if (!cached || !cached.timestamp || !cached.data) return null;
+        if (Date.now() - cached.timestamp > CACHE_TTL) return null;
+        return cached.data;
+      } catch (error) {
+        console.warn('subway cache parse failed', error);
+        return null;
+      }
+    }
+
+    function storeCache(data) {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data }));
+      } catch (error) {
+        console.warn('subway cache store failed', error);
+      }
+    }
+
+    function getStationLabelKey(name = '') {
+      return String(name).trim().replace(/\s+/g, ' ');
+    }
+
+    function getStationDistanceMeters(a, b) {
+      const avgLat = (((a && a.lat) || 0) + ((b && b.lat) || 0)) / 2;
+      const latScale = 111320;
+      const lonScale = Math.cos(Cesium.Math.toRadians(avgLat)) * 111320;
+      const dx = (((a && a.lon) || 0) - ((b && b.lon) || 0)) * lonScale;
+      const dy = (((a && a.lat) || 0) - ((b && b.lat) || 0)) * latScale;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function addEntities(dataset) {
+      if (!dataset) return;
+      dataSource.entities.removeAll();
+      (dataset.lines || []).forEach((line) => {
+        if (!Array.isArray(line.positions) || line.positions.length < 2) return;
+        dataSource.entities.add({
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray(line.positions.flat()),
+            width: 3.5,
+            material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.92),
+            clampToGround: true,
+          },
+          properties: { kind: 'subway-line', name: line.name || '지하철' },
+        });
+      });
+
+      const mergedStations = [];
+      (dataset.stations || []).forEach((station) => {
+        if (!Number.isFinite(station.lon) || !Number.isFinite(station.lat)) return;
+        const labelKey = getStationLabelKey(station.name);
+        if (!labelKey) return;
+
+        const existingStation = mergedStations.find((item) => item.key === labelKey && getStationDistanceMeters(item, station) <= 140);
+        if (existingStation) {
+          existingStation.lon = (existingStation.lon + station.lon) / 2;
+          existingStation.lat = (existingStation.lat + station.lat) / 2;
+          if (!existingStation.line && station.line) existingStation.line = station.line;
+          return;
+        }
+
+        mergedStations.push({
+          key: labelKey,
+          name: station.name || '',
+          lon: station.lon,
+          lat: station.lat,
+          line: station.line || '',
+          color: station.color || '#ffffff',
+        });
+      });
+
+      mergedStations.forEach((station) => {
+        dataSource.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
+          point: {
+            pixelSize: 6,
+            color: Cesium.Color.fromCssColorString(station.color || '#ffffff'),
+            outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
+            outlineWidth: 1.5,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: station.name || '',
+            font: '12px sans-serif',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
+            outlineWidth: 3,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+            pixelOffset: new Cesium.Cartesian2(0, -10),
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            scaleByDistance: new Cesium.NearFarScalar(5000, 1.0, 150000, 0.45),
+            translucencyByDistance: new Cesium.NearFarScalar(7000, 1.0, 220000, 0.0),
+          },
+          properties: { kind: 'subway-station', name: station.name || '', line: station.line || '' },
+        });
+      });
+      viewer.scene.requestRender();
+    }
+
+    function transformOverpass(raw) {
+      const elements = Array.isArray(raw && raw.elements) ? raw.elements : [];
+      const relationMap = new Map();
+      const wayMap = new Map();
+      const stations = [];
+      const seenStations = new Set();
+
+      elements.forEach((el) => {
+        if (el.type === 'relation' && el.tags) relationMap.set(el.id, el);
+        if (el.type === 'way' && Array.isArray(el.geometry)) wayMap.set(el.id, el);
+      });
+
+      elements.forEach((el) => {
+        if (el.type !== 'node') return;
+        const tags = el.tags || {};
+        const isStation = (tags.station && /(subway|light_rail|monorail)/i.test(tags.station)) ||
+          (tags.railway === 'station' && /(subway|light_rail|monorail)/i.test(tags.station || '')) ||
+          (tags.public_transport === 'station' && /(subway|light_rail|monorail)/i.test(tags.station || '')) ||
+          tags.subway === 'yes';
+        if (!isStation || !Number.isFinite(el.lon) || !Number.isFinite(el.lat)) return;
+        const name = tags.name || tags['name:ko'] || tags['official_name'] || '';
+        const dedupeKey = name + ':' + el.lon.toFixed(5) + ':' + el.lat.toFixed(5);
+        if (!name || seenStations.has(dedupeKey)) return;
+        seenStations.add(dedupeKey);
+        stations.push({
+          name,
+          lon: el.lon,
+          lat: el.lat,
+          line: tags.line || tags.ref || '',
+          color: resolveColor(tags),
+        });
+      });
+
+      const lines = [];
+      relationMap.forEach((relation) => {
+        const tags = relation.tags || {};
+        const members = Array.isArray(relation.members) ? relation.members : [];
+        const color = resolveColor(tags);
+        const name = resolveLineName(tags);
+        members.forEach((member) => {
+          if (member.type !== 'way') return;
+          const way = wayMap.get(member.ref);
+          if (!way || !Array.isArray(way.geometry) || way.geometry.length < 2) return;
+          lines.push({
+            name,
+            color,
+            positions: way.geometry.map((pos) => [pos.lon, pos.lat]),
+          });
+        });
+      });
+
+      return { lines, stations };
+    }
+
+    async function load() {
+      const cached = parseCached();
+      if (cached) {
+        addEntities(cached);
+        return;
+      }
+      const query = `
+[out:json][timeout:60];
+area["ISO3166-1"="KR"][admin_level=2]->.searchArea;
+(
+  relation(area.searchArea)["route"~"subway|light_rail|monorail"];
+  node(area.searchArea)["station"~"subway|light_rail|monorail"];
+  node(area.searchArea)["railway"="station"]["station"~"subway|light_rail|monorail"];
+  node(area.searchArea)["public_transport"="station"]["station"~"subway|light_rail|monorail"];
+  node(area.searchArea)["subway"="yes"];
+);
+out body;
+>;
+out geom qt;`;
+      try {
+        const response = await fetch(DATA_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+          body: 'data=' + encodeURIComponent(query),
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const raw = await response.json();
+        const transformed = transformOverpass(raw);
+        addEntities(transformed);
+        storeCache(transformed);
+      } catch (error) {
+        console.warn('Korea subway overlay load failed:', error);
+      }
+    }
+
+    load();
+
+    return {
+      setVisible(visible) {
+        dataSource.show = !!visible;
+        viewer.scene.requestRender();
+      },
+      reload() { return load(); },
+    };
   }
 
   function configureScene(viewer) {
@@ -329,34 +552,13 @@
     const loading = document.getElementById('loading');
     let dismissed = false;
     function dismiss() {
-      if (dismissed || !loading) return;
+      if (dismissed) return;
       dismissed = true;
       loading.classList.add('out');
       setTimeout(() => loading.classList.add('gone'), 700);
-      if (typeof window.__dismissWorldMapLoading === 'function') {
-        window.__dismissWorldMapLoading();
-      }
     }
-
-    let renderCount = 0;
-    const onPostRender = () => {
-      renderCount += 1;
-      if (renderCount >= 2) {
-        dismiss();
-        if (scene.postRender && typeof scene.postRender.removeEventListener === 'function') {
-          scene.postRender.removeEventListener(onPostRender);
-        }
-      }
-    };
-
-    scene.postRender.addEventListener(onPostRender);
     scene.globe.tileLoadProgressEvent.addEventListener(count => { if (count === 0) dismiss(); });
-    scene.renderError.addEventListener((error) => {
-      console.warn('scene render error:', error);
-      dismiss();
-    });
-    window.addEventListener('error', dismiss, { once: true });
-    setTimeout(dismiss, 2200);
+    setTimeout(dismiss, 4500);
   }
 
   function wireInfoBar(viewer, sharedState) {
@@ -790,7 +992,6 @@
     });
   }
 
-
   function readViewFromHash() {
     if (!location.hash) return null;
     const hash = location.hash.replace(/^#/, '');
@@ -1037,13 +1238,48 @@
       }));
     }
 
+    function makeUniqueFavoriteName(baseName, ignoreId = '') {
+      const fallback = String(baseName || '').trim() || '선택 위치';
+      const normalizedBase = fallback.trim().toLowerCase();
+      const existingNames = new Set(
+        favorites
+          .filter(item => !ignoreId || item.id !== ignoreId)
+          .map(item => String(item.name || '').trim().toLowerCase())
+      );
+
+      if (!existingNames.has(normalizedBase)) {
+        return fallback;
+      }
+
+      let suffix = 2;
+      while (existingNames.has((fallback + ' ' + suffix).trim().toLowerCase())) {
+        suffix += 1;
+      }
+      return `${fallback} ${suffix}`;
+    }
+
+    function buildAutoFavoriteName(place, lat, lon) {
+      const country = String(place?.country || '').trim();
+      const city = String(place?.city || '').trim();
+      const label = String(place?.label || '').trim();
+      const base = (country && city)
+        ? `${country} - ${city}`
+        : (country || city || label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+      return makeUniqueFavoriteName(base);
+    }
+
     function upsertFavorite(payload) {
+      const nextPayload = { ...payload };
+      nextPayload.name = String(nextPayload.name || '').trim() || '선택 위치';
+
       if (editIdInput.value) {
-        favorites = favorites.map(item => item.id === editIdInput.value ? { ...item, ...payload, id: item.id } : item);
+        nextPayload.name = makeUniqueFavoriteName(nextPayload.name, editIdInput.value);
+        favorites = favorites.map(item => item.id === editIdInput.value ? { ...item, ...nextPayload, id: item.id } : item);
       } else {
-        const duplicate = favorites.find(item => item.name === payload.name && Math.abs(item.lat - payload.lat) < 0.00001 && Math.abs(item.lon - payload.lon) < 0.00001);
+        nextPayload.name = makeUniqueFavoriteName(nextPayload.name);
+        const duplicate = favorites.find(item => Math.abs(item.lat - nextPayload.lat) < 0.00001 && Math.abs(item.lon - nextPayload.lon) < 0.00001);
         if (!duplicate) {
-          favorites.unshift({ id: 'fav_' + Date.now(), ...payload });
+          favorites.unshift({ id: 'fav_' + Date.now(), ...nextPayload });
         }
       }
       saveFavorites();
@@ -1053,8 +1289,8 @@
 
     async function saveFavoriteAtLocation(lat, lon, options = {}) {
       const place = options.place || await window.WorldSearch.reverseGeocode(lat, lon).catch(() => null);
-      const rawName = String(options.name || place?.city || place?.label || '선택 위치').trim();
-      const name = rawName || '선택 위치';
+      const manualName = String(options.name || '').trim();
+      const name = manualName || buildAutoFavoriteName(place, lat, lon);
       const sourceLabel = options.sourceLabel || place?.label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
       upsertFavorite({ name, lat, lon, alt: options.alt || 85000, sourceLabel });
       return { name, sourceLabel };
@@ -1063,20 +1299,18 @@
     sharedState.saveFavoriteAtLocation = saveFavoriteAtLocation;
 
     addCurrentBtn.addEventListener('click', async () => {
-      const name = (nameInput.value || '').trim();
-      if (!name) {
-        alert('즐겨찾기 이름을 입력해 주세요.');
-        return;
-      }
+      const inputName = (nameInput.value || '').trim();
       const carto = viewer.camera.positionCartographic;
       if (!carto) return;
       const lat = Cesium.Math.toDegrees(carto.latitude);
       const lon = Cesium.Math.toDegrees(carto.longitude);
+      let place = null;
       let sourceLabel = '';
       try {
-        const place = await window.WorldSearch.reverseGeocode(lat, lon);
-        sourceLabel = place.label || '';
+        place = await window.WorldSearch.reverseGeocode(lat, lon);
+        sourceLabel = place?.label || '';
       } catch (error) { console.warn(error); }
+      const name = inputName || buildAutoFavoriteName(place, lat, lon);
       upsertFavorite({ name, lat, lon, alt: carto.height, sourceLabel });
     });
 
