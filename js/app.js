@@ -72,7 +72,8 @@
     wireSearch(viewer, sharedState);
     wireShare(viewer, sharedState, styleManager);
     wireCurrentLocation(viewer, sharedState);
-    wireStylePicker(styleManager, sharedState);
+    wirePanelExclusivity();
+    wireStylePicker(viewer, styleManager, sharedState);
     wireMiniMap(viewer);
     wireFavorites(viewer, sharedState);
     wireMobileGestures(viewer);
@@ -210,8 +211,8 @@
       overlays.arcgisOverlay.alpha = isSatellite ? 0.95 : 0;
       overlays.cartoLightLabels.show = false;
       overlays.cartoLightLabels.alpha = 0;
-      overlays.railOverlay.show = isSubway;
-      overlays.railOverlay.alpha = isSubway ? 0.96 : 0;
+      overlays.railOverlay.show = false;
+      overlays.railOverlay.alpha = 0;
       viewer.scene.requestRender();
     }
 
@@ -721,6 +722,30 @@
     syncHash();
   }
 
+
+
+  function closeOtherPanels(exceptId) {
+    document.querySelectorAll('.tool-panel.open').forEach((panel) => {
+      if (!exceptId || panel.id !== exceptId) panel.classList.remove('open');
+    });
+  }
+
+  function wirePanelExclusivity() {
+    document.addEventListener('click', (event) => {
+      const target = event.target;
+      const inPanel = target.closest('.tool-panel');
+      const isToggle = target.closest('#style-toggle-btn, #favorites-toggle-btn');
+      if (!inPanel && !isToggle) closeOtherPanels(null);
+    });
+  }
+
+  function wireSubwayOverlay(style) {
+    const overlay = document.getElementById('subway-overlay');
+    if (!overlay) return;
+    overlay.classList.toggle('active', style === 'subway');
+    overlay.setAttribute('aria-hidden', style === 'subway' ? 'false' : 'true');
+  }
+
   function readViewFromHash() {
     if (!location.hash) return null;
     const hash = location.hash.replace(/^#/, '');
@@ -782,13 +807,14 @@
     });
   }
 
-  function wireStylePicker(styleManager, sharedState) {
+  function wireStylePicker(viewer, styleManager, sharedState) {
     const panel = document.getElementById('style-panel');
     const btn = document.getElementById('style-toggle-btn');
     const buttons = Array.from(panel.querySelectorAll('[data-style]'));
 
     function apply(style) {
       sharedState.currentStyle = styleManager.setStyle(style);
+      wireSubwayOverlay(sharedState.currentStyle);
       buttons.forEach(item => item.classList.toggle('active', item.dataset.style === sharedState.currentStyle));
       if (sharedState.currentStyle === 'subway') {
         viewer.camera.flyTo({
@@ -801,13 +827,18 @@
 
     function togglePanel() {
       const willOpen = !panel.classList.contains('open');
+      closeOtherPanels(willOpen ? panel.id : null);
       panel.classList.toggle('open', willOpen);
       if (willOpen) {
         requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 16 }));
       }
     }
 
-    btn.addEventListener('click', togglePanel);
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      togglePanel();
+    });
+    panel.addEventListener('click', (event) => event.stopPropagation());
     window.addEventListener('resize', () => {
       if (panel.classList.contains('open')) positionPanelNearButton(panel, btn, { offsetY: 16 });
     });
@@ -901,12 +932,14 @@
 
     function togglePanel() {
       const willOpen = !panel.classList.contains('open');
+      closeOtherPanels(willOpen ? panel.id : null);
       panel.classList.toggle('open', willOpen);
       if (willOpen) {
         requestAnimationFrame(() => positionPanelNearButton(panel, btn));
       }
     }
-    btn.addEventListener('click', togglePanel);
+    btn.addEventListener('click', (event) => { event.stopPropagation(); togglePanel(); });
+    panel.addEventListener('click', (event) => event.stopPropagation());
     window.addEventListener('resize', () => {
       if (panel.classList.contains('open')) positionPanelNearButton(panel, btn);
     });
