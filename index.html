@@ -115,7 +115,7 @@
     }
     .ib:last-child { border-right: 0; }
     .ib-l { font-size: 10px; color: #94a3b8; font-weight: 700; letter-spacing: 1px; }
-    .ib-v { font-size: 12px; color: #0f172a; font-weight: 800; }
+    .ib-v { font-size: clamp(10px, 1.1vw, 12px); color: #0f172a; font-weight: 800; white-space: nowrap; line-height: 1.1; }
 
     #zoom-ind {
       position: fixed; right: 16px; top: 50%; transform: translateY(-50%); z-index: 20;
@@ -176,11 +176,11 @@
 
     #minimap {
       position: fixed; right: 16px; top: 120px; z-index: 24;
-      width: 150px; background: rgba(15,23,42,.86); border-radius: 16px; padding: 10px;
+      width: 132px; background: rgba(15,23,42,.86); border-radius: 16px; padding: 10px;
       box-shadow: 0 14px 30px rgba(0,0,0,.3); backdrop-filter: blur(8px);
     }
     #minimap-label { font-size: 11px; color: #cbd5e1; margin-bottom: 8px; font-weight: 700; }
-    #minimap-canvas { width: 120px; height: 120px; display: block; margin: 0 auto; }
+    #minimap-canvas { width: 96px; height: 96px; display: block; margin: 0 auto; aspect-ratio: 1 / 1; }
 
     #mouse-info {
       position: fixed; z-index: 40; display: none; pointer-events: none;
@@ -201,16 +201,17 @@
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
     @media (max-width: 768px) {
-      #search-wrap { left: 10px; right: 10px; top: 10px; }
-      #search-row { width: fit-content; max-width: calc(100vw - 20px); }
-      #srch-panel.is-open { max-width: calc(100vw - 72px); }
-      #srch-input { width: min(220px, calc(100vw - 170px)); }
-      #srch-results { max-width: calc(100vw - 20px); }
+      #search-wrap { left: 10px; right: 10px; top: 10px; width: calc(100vw - 20px); }
+      #search-row { width: 100%; max-width: none; }
+      #srch-panel { flex: 1 1 auto; }
+      #srch-panel.is-open { max-width: none; }
+      #srch-input { width: 100%; min-width: 0; }
+      #srch-results { width: 100%; max-width: none; }
       #title { top: 72px; font-size: 10px; letter-spacing: 6px; }
       #info-bar { bottom: 10px; width: calc(100vw - 20px); }
       .ib { min-width: 0; flex: 1 1 0; padding: 9px 6px; }
       .ib-l { font-size: 9px; }
-      .ib-v { font-size: 11px; }
+      .ib-v { font-size: clamp(9px, 3.4vw, 11px); }
       #zoom-ind { right: 10px; }
       #globe-home-btn { right: 10px; bottom: 12px; width: 50px; height: 50px; }
       #globe-home-btn img { width: 26px; height: 26px; }
@@ -219,8 +220,9 @@
       .tool-panel { right: 10px; left: 10px; width: auto; max-width: none; }
       #favorites-panel { width: 300px; }
       #style-panel { width: 220px; }
-      #minimap { right: 10px; top: 126px; width: 118px; padding: 8px; }
+      #minimap { right: 10px; top: 126px; width: 102px; padding: 8px; }
       #minimap-label { font-size: 10px; margin-bottom: 6px; }
+      #minimap-canvas { width: 78px; height: 78px; }
       #mouse-info { display: none !important; }
       #toast { top: 70px; width: calc(100vw - 32px); text-align: center; border-radius: 12px; }
     }
@@ -267,8 +269,7 @@
     <div class="ib"><span class="ib-l">경도</span><span class="ib-v" id="ib-lon">—</span></div>
     <div class="ib"><span class="ib-l">고도</span><span class="ib-v" id="ib-alt">—</span></div>
     <div class="ib"><span class="ib-l">줌</span><span class="ib-v" id="ib-zoom">—</span></div>
-    <div class="ib"><span class="ib-l">검색</span><span class="ib-v">LOCAL</span></div>
-  </div>
+      </div>
 
   <div id="zoom-ind">
     <div class="zi-l">zoom</div>
@@ -293,12 +294,11 @@
 
   <div id="style-panel" class="tool-panel">
     <div class="panel-title">지도 스타일</div>
-    <div class="panel-desc">위성 / 일반 / 지형 / 야간 모드를 전환할 수 있습니다.</div>
+    <div class="panel-desc">위성 / 일반 / 지형 모드를 전환할 수 있습니다.</div>
     <div class="style-options">
       <button type="button" class="style-option" data-style="satellite">위성</button>
       <button type="button" class="style-option" data-style="roadmap">일반 지도</button>
       <button type="button" class="style-option" data-style="terrain">지형</button>
-      <button type="button" class="style-option" data-style="night">야간</button>
     </div>
   </div>
 

@@ -160,11 +160,7 @@
       }), 0),
       terrain: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 18,
-      }), 0),
-      night: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 16,
+        maximumLevel: 17,
       }), 0),
     };
 
@@ -191,9 +187,6 @@
         active.brightness = 1.04;
         active.contrast = 1.08;
         active.gamma = 0.98;
-      } else if (style === 'night') {
-        active.brightness = 1.08;
-        active.gamma = 1.02;
       }
     }
 
@@ -305,6 +298,12 @@
     let reverseDebounce = null;
     let latestLocationKey = '';
 
+    function pickCartesian(screenPosition) {
+      if (!screenPosition) return null;
+      const ray = viewer.camera.getPickRay(screenPosition);
+      return (ray && scene.globe.pick(ray, scene)) || viewer.camera.pickEllipsoid(screenPosition, scene.globe.ellipsoid);
+    }
+
     function positionMouseInfo(pointer) {
       if (window.matchMedia('(max-width: 768px)').matches) return;
       miBox.style.display = 'block';
@@ -359,9 +358,16 @@
 
     handler.setInputAction(movement => {
       sharedState.lastPointerPosition = { x: movement.endPosition.x, y: movement.endPosition.y };
-      sharedState.lastPointerCartesian = viewer.camera.pickEllipsoid(movement.endPosition, scene.globe.ellipsoid);
+      sharedState.lastPointerCartesian = pickCartesian(movement.endPosition);
       updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition);
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    handler.setInputAction(movement => {
+      const position = movement.position || movement.endPosition;
+      sharedState.lastPointerPosition = { x: position.x, y: position.y };
+      sharedState.lastPointerCartesian = pickCartesian(position);
+      updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition);
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
     scene.canvas.addEventListener('mouseleave', () => {
       sharedState.lastPointerCartesian = null;
@@ -442,12 +448,18 @@
     let debounce = null;
     let queryToken = 0;
 
+    function syncResultsWidth() {
+      const width = Math.max(row.getBoundingClientRect().width, 280);
+      results.style.width = width + 'px';
+    }
+
     function openPanel() {
       isOpen = true;
       row.classList.add('is-open');
       panel.classList.add('is-open');
       btn.classList.add('is-open');
       btn.setAttribute('aria-expanded', 'true');
+      requestAnimationFrame(syncResultsWidth);
       setTimeout(() => input.focus(), 50);
     }
 
@@ -466,6 +478,7 @@
       currentItems = items;
       activeIndex = -1;
       if (!items.length) {
+        syncResultsWidth();
         results.innerHTML = '<div class="r-msg">검색 결과가 없습니다.</div>';
         results.style.display = 'block';
         row.classList.add('has-results');
@@ -473,6 +486,7 @@
         return;
       }
 
+      syncResultsWidth();
       results.innerHTML = '';
       items.forEach((item, index) => {
         const meta = window.WorldSearch.getResultLabel(item);
@@ -607,6 +621,8 @@
         row.classList.remove('has-results');
       }
     });
+    window.addEventListener('resize', syncResultsWidth);
+    syncResultsWidth();
   }
 
   function wireShare(viewer, sharedState, styleManager) {
@@ -689,12 +705,13 @@
 
   function positionPanelNearButton(panel, button, options = {}) {
     const gap = options.gap || 12;
+    const offsetY = options.offsetY || 0;
     const buttonRect = button.getBoundingClientRect();
     const panelRect = panel.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const top = Math.min(
-      Math.max(10, buttonRect.top + buttonRect.height / 2 - panelRect.height / 2),
+      Math.max(10, buttonRect.top + buttonRect.height / 2 - panelRect.height / 2 + offsetY),
       viewportHeight - panelRect.height - 10,
     );
     const left = Math.max(10, Math.min(viewportWidth - panelRect.width - 10, buttonRect.left - panelRect.width - gap));
@@ -742,17 +759,17 @@
       const willOpen = !panel.classList.contains('open');
       panel.classList.toggle('open', willOpen);
       if (willOpen) {
-        requestAnimationFrame(() => positionPanelNearButton(panel, btn));
+        requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 16 }));
       }
     }
 
     btn.addEventListener('click', togglePanel);
     window.addEventListener('resize', () => {
-      if (panel.classList.contains('open')) positionPanelNearButton(panel, btn);
+      if (panel.classList.contains('open')) positionPanelNearButton(panel, btn, { offsetY: 16 });
     });
     buttons.forEach(item => item.addEventListener('click', () => {
       apply(item.dataset.style);
-      requestAnimationFrame(() => positionPanelNearButton(panel, btn));
+      requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 16 }));
     }));
     apply(sharedState.currentStyle || DEFAULT_STYLE);
   }
@@ -761,9 +778,21 @@
     const canvas = document.getElementById('minimap-canvas');
     const ctx = canvas.getContext('2d');
     const bg = new Image();
-    bg.src = 'earth_real.jpg';
+    bg.src = 'earth-loading.png';
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(64, Math.round(rect.width * dpr));
+      const height = Math.max(64, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    }
 
     function draw() {
+      resizeCanvas();
       const size = Math.min(canvas.width, canvas.height);
       const cx = canvas.width / 2;
       const cy = canvas.height / 2;
@@ -781,12 +810,10 @@
         ctx.fillStyle = '#09172f';
         ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
       }
-      ctx.fillStyle = 'rgba(0,0,0,.1)';
-      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
       ctx.restore();
 
       ctx.strokeStyle = 'rgba(255,255,255,.22)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = Math.max(2, canvas.width / 60);
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.stroke();
@@ -799,18 +826,19 @@
       const y = cy - radius + ((90 - lat) / 180) * (radius * 2);
 
       ctx.strokeStyle = 'rgba(255,255,255,.8)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = Math.max(2, canvas.width / 70);
       ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.arc(x, y, Math.max(5, canvas.width / 24), 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = '#60a5fa';
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.arc(x, y, Math.max(3, canvas.width / 36), 0, Math.PI * 2);
       ctx.fill();
     }
 
-    bg.onload = () => draw();
+    bg.onload = draw;
     viewer.camera.changed.addEventListener(draw);
+    window.addEventListener('resize', draw);
     draw();
   }
 
