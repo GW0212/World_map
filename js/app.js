@@ -155,12 +155,14 @@
     const baseLayers = {
       satellite: initialBaseLayer,
       roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 19,
+        url: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+        maximumLevel: 20,
+        credit: 'CARTO / OpenStreetMap',
       }), 0),
       terrain: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+        url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
         maximumLevel: 17,
+        credit: 'OpenTopoMap / OpenStreetMap',
       }), 0),
     };
 
@@ -192,19 +194,41 @@
 
     function syncOverlayVisibility(style) {
       if (!overlays) return;
-      overlays.arcgisLabels.show = style === 'satellite' || style === 'terrain';
-      overlays.arcgisLabels.alpha = style === 'terrain' ? 0.82 : 0.92;
-      overlays.arcgisOverlay.show = style === 'satellite' || style === 'terrain';
-      overlays.arcgisOverlay.alpha = style === 'terrain' ? 0.9 : 0.95;
+      const isSatellite = style === 'satellite';
+      overlays.arcgisLabels.show = isSatellite;
+      overlays.arcgisLabels.alpha = isSatellite ? 0.92 : 0;
+      overlays.arcgisOverlay.show = isSatellite;
+      overlays.arcgisOverlay.alpha = isSatellite ? 0.95 : 0;
       overlays.cartoLightLabels.show = false;
       overlays.cartoLightLabels.alpha = 0;
       viewer.scene.requestRender();
     }
 
-    return {
+    const manager = {
       attachOverlays(value) {
         overlays = value;
         syncOverlayVisibility(DEFAULT_STYLE);
+      },
+      wireProviderRecovery() {
+        const fallbackToSatellite = () => {
+          Object.entries(baseLayers).forEach(([name, layer]) => {
+            const active = name === 'satellite';
+            layer.show = active;
+            layer.alpha = active ? 1 : 0;
+          });
+          applyBaseLayerTuning('satellite');
+          syncOverlayVisibility('satellite');
+          viewer.scene.requestRender();
+        };
+        ['roadmap', 'terrain'].forEach((name) => {
+          const provider = baseLayers[name] && baseLayers[name].imageryProvider;
+          if (provider && provider.errorEvent && typeof provider.errorEvent.addEventListener === 'function') {
+            provider.errorEvent.addEventListener((error) => {
+              console.warn(name + ' imagery provider error:', error);
+              if (baseLayers[name].show) fallbackToSatellite();
+            });
+          }
+        });
       },
       setStyle(style) {
         const key = baseLayers[style] ? style : DEFAULT_STYLE;
@@ -218,6 +242,8 @@
         return key;
       },
     };
+    manager.wireProviderRecovery();
+    return manager;
   }
 
   function configureScene(viewer) {
