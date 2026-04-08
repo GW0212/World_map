@@ -322,6 +322,27 @@
 
   <button id="globe-home-btn" type="button" aria-label="홈 화면으로 이동" title="지구 보기"><img src="earth-loading.png" alt="지구"></button>
 
+  
+  <script>
+    (function(){
+      function dismissLoading(forceText){
+        var loading = document.getElementById('loading');
+        if(!loading) return;
+        if(forceText){
+          var sub = loading.querySelector('.ld-sub');
+          if(sub) sub.textContent = forceText;
+        }
+        loading.classList.add('out');
+        setTimeout(function(){ if (loading) loading.classList.add('gone'); }, 700);
+      }
+      window.__dismissWorldMapLoading = dismissLoading;
+      window.addEventListener('load', function(){ setTimeout(function(){ dismissLoading(); }, 900); }, { once:true });
+      document.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){ dismissLoading(); }, 3200); }, { once:true });
+      window.addEventListener('error', function(){ dismissLoading('지도 표시 준비 중...'); }, { once:true });
+      window.addEventListener('unhandledrejection', function(){ dismissLoading('지도 표시 준비 중...'); }, { once:true });
+    }());
+  </script>
+
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Cesium.js"></script>
   <script src="data/countries.js"></script>
   <script src="data/cities.js"></script>

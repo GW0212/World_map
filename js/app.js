@@ -17,7 +17,8 @@
   window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/';
 
   function boot() {
-    Cesium.Ion.defaultAccessToken = undefined;
+    try {
+      Cesium.Ion.defaultAccessToken = undefined;
 
     const creditSink = document.createElement('div');
     creditSink.style.display = 'none';
@@ -79,6 +80,12 @@
     wireMobileGestures(viewer);
 
     scene.requestRender();
+    } catch (error) {
+      console.error('World Map boot failed:', error);
+      if (typeof window.__dismissWorldMapLoading === 'function') {
+        window.__dismissWorldMapLoading('지도 표시 준비 중...');
+      }
+    }
   }
 
   function createViewer(creditSink) {
@@ -326,6 +333,9 @@
       dismissed = true;
       loading.classList.add('out');
       setTimeout(() => loading.classList.add('gone'), 700);
+      if (typeof window.__dismissWorldMapLoading === 'function') {
+        window.__dismissWorldMapLoading();
+      }
     }
 
     let renderCount = 0;
