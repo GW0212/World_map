@@ -919,26 +919,6 @@ out center tags;`;
     }
 
     const isCountry = typeRaw === 'country' || clsRaw === 'boundary';
-    const combinedLabel = [
-      item.name,
-      item.display_name,
-      item.namedetails && (item.namedetails['name:ko'] || item.namedetails.name),
-      addr.neighbourhood,
-      addr.suburb,
-      addr.quarter,
-      addr.city_district,
-      addr.borough,
-      addr.hamlet,
-      addr.village,
-      addr.town,
-      addr.city,
-    ].filter(Boolean).map(v => String(v).trim()).join(' | ');
-    const isDongLevel = /(?:^|\s|·|,)[가-힣A-Za-z0-9-]+동(?:\b|\s|·|,)|\b(neighbourhood|suburb|quarter|hamlet)\b/i.test(combinedLabel)
-      || /(?:dong|neighborhood|neighbourhood)/i.test(typeRaw);
-    const isGuLevel = /(?:^|\s|·|,)[가-힣A-Za-z0-9-]+구(?:\b|\s|·|,)|\b(borough|city_district|district)\b/i.test(combinedLabel)
-      || /\b(borough|district)\b/i.test(typeRaw);
-    const placeZoom = isDongLevel ? 15 : (isGuLevel ? 13 : 10);
-
     const mapped = tokenizeEntry({
       type: isCountry ? 'country' : 'city',
       nameKo: '',
@@ -948,7 +928,7 @@ out center tags;`;
       countryCode,
       lat,
       lon,
-      zoom: isCountry ? 6 : placeZoom,
+      zoom: isCountry ? 6 : 10,
       isCapital: false,
       priority: 120,
       aliases: [],
@@ -979,17 +959,6 @@ out center tags;`;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     const explicitCountry = inferCountryFromText(attrs.Country || attrs.LongLabel || attrs.Match_addr || '');
     const countryCode = explicitCountry?.code || '';
-
-    const combinedLabel = [attrs.PlaceName, attrs.City, attrs.Region, attrs.LongLabel, attrs.Match_addr, attrs.Neighborhood, attrs.District]
-      .filter(Boolean)
-      .map(v => String(v).trim())
-      .join(' | ');
-    const typeLabel = String(attrs.Addr_type || attrs.Type || '');
-    const isDongLevel = /(?:^|\s|·|,)[가-힣A-Za-z0-9-]+동(?:\b|\s|·|,)|\b(neighbourhood|neighborhood|suburb|quarter|hamlet)\b/i.test(combinedLabel)
-      || /(?:dong|neighbourhood|neighborhood)/i.test(typeLabel);
-    const isGuLevel = /(?:^|\s|·|,)[가-힣A-Za-z0-9-]+구(?:\b|\s|·|,)|\b(borough|city_district|district)\b/i.test(combinedLabel)
-      || /\b(borough|district)\b/i.test(typeLabel);
-    const placeZoom = isDongLevel ? 15 : (isGuLevel ? 13 : 10);
     if (queryProfile.hasStructuredCountry && countryCode && !queryProfile.mentionedCountryCodes.has(countryCode)) {
       return null;
     }
@@ -1004,7 +973,7 @@ out center tags;`;
       countryCode,
       lat,
       lon,
-      zoom: isCountry ? 6 : placeZoom,
+      zoom: isCountry ? 6 : 10,
       isCapital: false,
       priority: 130,
       aliases: [],
