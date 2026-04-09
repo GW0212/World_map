@@ -84,48 +84,41 @@
   }
 
   function createViewer(creditSink) {
+    const commonOptions = {
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+      animation: false,
+      timeline: false,
+      fullscreenButton: false,
+      infoBox: false,
+      selectionIndicator: false,
+      creditContainer: creditSink,
+      requestRenderMode: true,
+      maximumRenderTimeChange: Infinity,
+    };
     try {
+      // UrlTemplateImageryProvider: 메타데이터 요청 없이 즉시 타일 로드 시작 (무한로딩 방지)
       return new Cesium.Viewer('cesiumContainer', {
-        imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
-          url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
-          enablePickFeatures: false,
-        }),
-        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
-        baseLayerPicker: false,
-        geocoder: false,
-        homeButton: false,
-        sceneModePicker: false,
-        navigationHelpButton: false,
-        animation: false,
-        timeline: false,
-        fullscreenButton: false,
-        infoBox: false,
-        selectionIndicator: false,
-        creditContainer: creditSink,
-        requestRenderMode: true,
-        maximumRenderTimeChange: Infinity,
-      });
-    } catch (error) {
-      console.warn('ArcGIS provider fallback:', error);
-      return new Cesium.Viewer('cesiumContainer', {
+        ...commonOptions,
         imageryProvider: new Cesium.UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 19,
+          credit: 'Esri, Maxar, Earthstar Geographics',
         }),
-        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
-        baseLayerPicker: false,
-        geocoder: false,
-        homeButton: false,
-        sceneModePicker: false,
-        navigationHelpButton: false,
-        animation: false,
-        timeline: false,
-        fullscreenButton: false,
-        infoBox: false,
-        selectionIndicator: false,
-        creditContainer: creditSink,
-        requestRenderMode: true,
-        maximumRenderTimeChange: Infinity,
+      });
+    } catch (error) {
+      console.warn('primary imagery provider failed, using fallback:', error);
+      return new Cesium.Viewer('cesiumContainer', {
+        ...commonOptions,
+        imageryProvider: new Cesium.UrlTemplateImageryProvider({
+          url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          maximumLevel: 19,
+          credit: 'OpenStreetMap contributors',
+        }),
       });
     }
   }
@@ -309,11 +302,12 @@
 
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEYS = ['worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
+    const CACHE_KEYS = ['worldmap:korea-subway-overlay:v34', 'worldmap:korea-subway-overlay:v33', 'worldmap:korea-subway-overlay:v28', 'worldmap:korea-subway-overlay:v27', 'worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
     const CACHE_TTL = 1000 * 60 * 60 * 24 * 14;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
     dataSource.show = false;
     viewer.dataSources.add(dataSource);
+    window.KR_SUBWAY_OVERLAY_DATA = window.KR_SUBWAY_OVERLAY_DATA || null;
 
     const lineColorMap = {
       '1호선': '#0D3692', '2호선': '#33A23D', '3호선': '#FE5B10', '4호선': '#32A1C8',
@@ -343,7 +337,18 @@
     }
 
     function resolveLineName(tags = {}) {
-      return tags.name || tags.ref || tags.line || tags.route || '지하철';
+      return tags['name:ko'] || tags.name || tags.ref || tags.line || tags.route || '지하철';
+    }
+
+    function normalizeLineName(name = '') {
+      return String(name || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function isExcludedUrbanRail(tags = {}) {
+      const text = [
+        tags['name:ko'], tags.name, tags.ref, tags.network, tags.operator, tags.brand, tags.description
+      ].filter(Boolean).join(' ');
+      return /(월미바다열차|월미은하레일|자기부상열차|관광열차|관광\s*모노레일|케이블카|삭도)/i.test(text);
     }
 
     function parseCached() {
@@ -370,6 +375,7 @@
         CACHE_KEYS.forEach((cacheKey) => {
           localStorage.setItem(cacheKey, payload);
         });
+        window.KR_SUBWAY_OVERLAY_DATA = data;
       } catch (error) {
         console.warn('subway cache store failed', error);
       }
@@ -433,150 +439,167 @@
       }
     }
 
+    // canvas 캐시: 동일 색상 조합은 재사용 (매번 DOM 생성 방지)
+    const dotsCanvasCache = new Map();
+
+    function makeLineDotsCanvasCached(lines) {
+      const key = lines.map(l => (l.color || '#4B8BFF').toLowerCase()).join('|');
+      if (dotsCanvasCache.has(key)) return dotsCanvasCache.get(key);
+      const canvas = makeLineDotsCanvas(lines);
+      if (canvas) dotsCanvasCache.set(key, canvas);
+      return canvas;
+    }
+
     function addEntities(dataset) {
       if (!dataset) return;
-      dataSource.entities.removeAll();
-      (dataset.lines || []).forEach((line) => {
-        if (!Array.isArray(line.positions) || line.positions.length < 2) return;
-        dataSource.entities.add({
-          polyline: {
-            positions: Cesium.Cartesian3.fromDegreesArray(line.positions.flat()),
-            width: 3.5,
-            material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.92),
-            clampToGround: true,
-          },
-          properties: { kind: 'subway-line', name: line.name || '지하철' },
-        });
-      });
+      // 새 데이터 로드 시 canvas 캐시 초기화
+      dotsCanvasCache.clear();
+      // suspendEvents: 수백 개 entity add를 배치 처리 — 내부 update 1회로 압축
+      dataSource.entities.suspendEvents();
+      try {
+        dataSource.entities.removeAll();
 
-      // ── 역 병합: 이름 + 근접도 기준 ──────────────────────────────
-      const mergedStations = [];
-      (dataset.stations || []).forEach((station) => {
-        if (!Number.isFinite(station.lon) || !Number.isFinite(station.lat)) return;
-        const labelKey = getStationLabelKey(station.name);
-        if (!labelKey) return;
-
-        // 같은 이름 & 800m 이내 OR 300m 이내(이름 무관) → 기존 역에 병합
-        const existing = mergedStations.find((item) => {
-          const dist = getStationDistanceMeters(item, station);
-          return (item.key === labelKey && dist <= 800) || dist <= 150;
-        });
-
-        if (existing) {
-          // 좌표 평균
-          existing.lon = (existing.lon + station.lon) / 2;
-          existing.lat = (existing.lat + station.lat) / 2;
-          // displayName 갱신: 항상 정규화된 이름 사용
-          existing.displayName = normalizeStationDisplayName(existing.name);
-          // 노선 추가: 이름 & 색상 모두 유효하고 중복 없는 경우만
-          if (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF') {
-            const dup = existing.lines.some(
-              l => l.line === station.line || l.color.toLowerCase() === station.color.toLowerCase()
-            );
-            if (!dup) existing.lines.push({ line: station.line, color: station.color });
-          }
-        } else {
-          const firstLines = (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF')
-            ? [{ line: station.line, color: station.color }]
-            : [];
-          mergedStations.push({
-            key: labelKey,
-            name: station.name || '',
-            displayName: normalizeStationDisplayName(station.name),
-            lon: station.lon,
-            lat: station.lat,
-            lines: firstLines,
+        (dataset.lines || []).forEach((line) => {
+          if (!Array.isArray(line.positions) || line.positions.length < 2) return;
+          dataSource.entities.add({
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray(line.positions.flat()),
+              width: 4.2,
+              material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.92),
+              clampToGround: true,
+            },
+            properties: { kind: 'subway-line', name: line.name || '지하철' },
           });
-        }
-      });
-
-      // ── lines 배열 최종 정리: 색상 기준 중복 제거(대소문자 무시) ──
-      mergedStations.forEach((s) => {
-        const seenColors = new Set();
-        s.lines = s.lines.filter((l) => {
-          const key = (l.color || '').toLowerCase();
-          if (seenColors.has(key)) return false;
-          seenColors.add(key);
-          return true;
         });
-      });
 
-      // ── mergedStations 자체 중복 제거 (동일 이름·근접 역이 혹시 2개라면 합산) ──
-      for (let i = mergedStations.length - 1; i >= 0; i--) {
-        for (let j = 0; j < i; j++) {
-          const a = mergedStations[j], b = mergedStations[i];
-          const dist = getStationDistanceMeters(a, b);
-          if ((a.key === b.key && dist <= 800) || dist <= 80) {
-            // b → a에 병합
-            b.lines.forEach((l) => {
-              const dup = a.lines.some((al) => al.color.toLowerCase() === l.color.toLowerCase());
-              if (!dup) a.lines.push(l);
+        // ── 역 병합: 이름 + 근접도 기준 ──────────────────────────────
+        const mergedStations = [];
+        (dataset.stations || []).forEach((station) => {
+          if (!Number.isFinite(station.lon) || !Number.isFinite(station.lat)) return;
+          const labelKey = getStationLabelKey(station.name);
+          if (!labelKey) return;
+
+          const existing = mergedStations.find((item) => {
+            if (item.key !== labelKey) return false;
+            const dist = getStationDistanceMeters(item, station);
+            return dist <= 400;
+          });
+
+          if (existing) {
+            existing.lon = (existing.lon + station.lon) / 2;
+            existing.lat = (existing.lat + station.lat) / 2;
+            existing.displayName = normalizeStationDisplayName(existing.name);
+            if (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF') {
+              const dup = existing.lines.some(
+                l => l.line === station.line || l.color.toLowerCase() === station.color.toLowerCase()
+              );
+              if (!dup) existing.lines.push({ line: station.line, color: station.color });
+            }
+          } else {
+            const firstLines = (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF')
+              ? [{ line: station.line, color: station.color }]
+              : [];
+            mergedStations.push({
+              key: labelKey,
+              name: station.name || '',
+              displayName: normalizeStationDisplayName(station.name),
+              lon: station.lon,
+              lat: station.lat,
+              lines: firstLines,
             });
-            mergedStations.splice(i, 1);
-            break;
+          }
+        });
+
+        // ── lines 배열 최종 정리: 색상 기준 중복 제거 ──
+        mergedStations.forEach((s) => {
+          const seenColors = new Set();
+          s.lines = s.lines.filter((l) => {
+            const key = (l.color || '').toLowerCase();
+            if (seenColors.has(key)) return false;
+            seenColors.add(key);
+            return true;
+          });
+        });
+
+        // ── mergedStations 자체 중복 제거 ──
+        for (let i = mergedStations.length - 1; i >= 0; i--) {
+          for (let j = 0; j < i; j++) {
+            const a = mergedStations[j], b = mergedStations[i];
+            if (a.key === b.key && getStationDistanceMeters(a, b) <= 400) {
+              b.lines.forEach((l) => {
+                const dup = a.lines.some((al) => al.color.toLowerCase() === l.color.toLowerCase());
+                if (!dup) a.lines.push(l);
+              });
+              mergedStations.splice(i, 1);
+              break;
+            }
           }
         }
-      }
 
-      if (window.WorldSearch && typeof window.WorldSearch.registerSubwayStations === 'function') {
-        window.WorldSearch.registerSubwayStations(mergedStations.map((s) => ({
-          ...s,
-          name: s.displayName || normalizeStationDisplayName(s.name) || s.name,
-          line: (s.lines[0] || {}).line || '',
-          color: (s.lines[0] || {}).color || '#4B8BFF',
-          zoom: 12,
-          countryKo: '대한민국',
-          countryEn: 'Korea',
-          countryCode: 'KR',
-        })));
-      }
+        if (window.WorldSearch && typeof window.WorldSearch.registerSubwayStations === 'function') {
+          window.WorldSearch.registerSubwayStations(mergedStations.map((s) => ({
+            ...s,
+            name: s.displayName || normalizeStationDisplayName(s.name) || s.name,
+            line: (s.lines[0] || {}).line || '',
+            color: (s.lines[0] || {}).color || '#4B8BFF',
+            zoom: 12,
+            countryKo: '대한민국',
+            countryEn: 'Korea',
+            countryCode: 'KR',
+          })));
+        }
 
-      // ── 렌더링 ────────────────────────────────────────────────────
-      mergedStations.forEach((station) => {
-        // 노선이 없으면 기본 색상 1개
-        const lines = station.lines.length > 0
-          ? station.lines
-          : [{ line: '', color: '#4B8BFF' }];
+        // ── 렌더링 ────────────────────────────────────────────────────
+        mergedStations.forEach((station) => {
+          const seenRenderColors = new Set();
+          const dedupedLines = (station.lines.length > 0 ? station.lines : [{ line: '', color: '#4B8BFF' }])
+            .filter((l) => {
+              const k = (l.color || '#4B8BFF').toLowerCase().replace(/\s+/g, '');
+              if (seenRenderColors.has(k)) return false;
+              seenRenderColors.add(k);
+              return true;
+            });
 
-        const dotsCanvas = makeLineDotsCanvas(lines);
+          const dotsCanvas = makeLineDotsCanvasCached(dedupedLines);
 
-        // 역명 라벨 (지도 위치 기준 위쪽)
-        dataSource.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
-          label: {
-            text: station.displayName || normalizeStationDisplayName(station.name) || '',
-            font: '12px sans-serif',
-            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-            fillColor: Cesium.Color.WHITE,
-            outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
-            outlineWidth: 3,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-            pixelOffset: new Cesium.Cartesian2(0, -22),
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            scaleByDistance: new Cesium.NearFarScalar(5000, 1.0, 150000, 0.45),
-            translucencyByDistance: new Cesium.NearFarScalar(7000, 1.0, 220000, 0.0),
-          },
-          properties: { kind: 'subway-station', name: station.name || '', line: lines.map(l => l.line).join(',') },
+          dataSource.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
+            label: {
+              text: station.displayName || normalizeStationDisplayName(station.name) || '',
+              font: '12px sans-serif',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
+              outlineWidth: 3,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+              pixelOffset: new Cesium.Cartesian2(0, -22),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              scaleByDistance: new Cesium.NearFarScalar(12000, 1.0, 4000000, 0.62),
+              translucencyByDistance: new Cesium.NearFarScalar(15000, 1.0, 6500000, 0.18),
+            },
+            properties: { kind: 'subway-station', name: station.name || '', line: dedupedLines.map(l => l.line).join(',') },
+          });
+          if (!dotsCanvas) return;
+          dataSource.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
+            billboard: {
+              image: dotsCanvas,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+              pixelOffset: new Cesium.Cartesian2(0, -10),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              scaleByDistance: new Cesium.NearFarScalar(12000, 1.0, 2500000, 0.62),
+              translucencyByDistance: new Cesium.NearFarScalar(15000, 1.0, 4000000, 0.15),
+            },
+          });
         });
-
-        // 노선 색상 점 (역명 바로 아래 ~ 지도 위치 위쪽)
-        if (!dotsCanvas) return; // canvas 생성 실패 시 건너뜀
-        dataSource.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
-          billboard: {
-            image: dotsCanvas,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-            pixelOffset: new Cesium.Cartesian2(0, -10),
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            scaleByDistance: new Cesium.NearFarScalar(5000, 1.0, 150000, 0.45),
-            translucencyByDistance: new Cesium.NearFarScalar(7000, 1.0, 220000, 0.0),
-          },
-        });
-      });
+      } finally {
+        // resumeEvents: 모든 add 완료 후 Cesium 내부 update 1회 발생
+        dataSource.entities.resumeEvents();
+      }
       viewer.scene.requestRender();
     }
 
@@ -596,11 +619,12 @@
     }
 
     function nodeLooksLikeStation(tags = {}) {
+      if (isExcludedUrbanRail(tags)) return false;
       const railway = String(tags.railway || '').toLowerCase();
       const publicTransport = String(tags.public_transport || '').toLowerCase();
       const station = String(tags.station || '').toLowerCase();
-      const text = [tags.name, tags.network, tags.operator, tags.line, tags.ref].filter(Boolean).join(' ');
-      return !!(tags.name && (
+      const text = [tags['name:ko'], tags.name, tags.network, tags.operator, tags.line, tags.ref].filter(Boolean).join(' ');
+      return !!((tags['name:ko'] || tags.name) && (
         station === 'subway' || station === 'light_rail' || station === 'monorail' ||
         railway === 'station' || railway === 'halt' || railway === 'platform' ||
         publicTransport === 'station' || publicTransport === 'platform' || publicTransport === 'stop_position' ||
@@ -633,11 +657,11 @@
         : centerFromGeometry(source.geometry);
       if (!name || !point) return;
       const resolvedLine = lineName || tags.line || tags.ref || '';
-      // 노선별 중복 방지
-      const dedupeKey = name + ':' + resolvedLine + ':' + point.lon.toFixed(5) + ':' + point.lat.toFixed(5);
+      // 위치+이름 기준 전역 중복 방지 (노선명은 dedup key에서 제외 → 방향별 중복 relation 처리 시 같은 역 2번 추가 방지)
+      const dedupeKey = name + ':' + point.lon.toFixed(4) + ':' + point.lat.toFixed(4);
       if (stationSeen.has(dedupeKey)) return;
       stationSeen.add(dedupeKey);
-      // 이름 기준 중복 방지 (좌표 오차로 인한 미스매치 방지)
+      // 이름 기준 중복 방지
       const locKey = name.replace(/역$/, '').trim();
       stationSeenByLoc.add(locKey);
       stations.push({ name, lon: point.lon, lat: point.lat, line: resolvedLine, color: color || resolveColor(tags) });
@@ -668,9 +692,11 @@
 
       selectedRelations.forEach((relation) => {
         const tags = relation.tags || {};
+        if (isExcludedUrbanRail(tags)) return;
         const members = Array.isArray(relation.members) ? relation.members : [];
         const color = resolveColor(tags);
-        const name = resolveLineName(tags) || relationText(tags) || '지하철';
+        const name = normalizeLineName(resolveLineName(tags) || relationText(tags) || '지하철');
+        const segmentSeen = new Set();
 
         // 1패스: 역 먼저 수집
         const relationStations = [];
@@ -701,9 +727,15 @@
           if (!way || !Array.isArray(way.geometry) || way.geometry.length < 2) return;
           if (roleLooksLikeStation(member.role)) return; // 역 플랫폼 way는 선로로 안 그림
 
-          // 역이 없거나 역 관련 role이 아닌 way는 모두 선로로 포함
-          // (차량기지 필터는 제거 - 끊김 현상 방지)
-          lines.push({ name, color, positions: way.geometry.map((pos) => [pos.lon, pos.lat]) });
+          const positions = way.geometry
+            .filter((pos) => Number.isFinite(pos.lon) && Number.isFinite(pos.lat))
+            .map((pos) => [pos.lon, pos.lat]);
+          if (positions.length < 2) return;
+          const segKey = positions[0].join(',') + '|' + positions[positions.length - 1].join(',');
+          const reverseKey = positions[positions.length - 1].join(',') + '|' + positions[0].join(',');
+          if (segmentSeen.has(segKey) || segmentSeen.has(reverseKey)) return;
+          segmentSeen.add(segKey);
+          lines.push({ name, color, positions });
         });
       });
 
@@ -711,8 +743,8 @@
       elements.forEach((el) => {
         if (el.type !== 'node' || !Number.isFinite(el.lon) || !Number.isFinite(el.lat)) return;
         const tags = el.tags || {};
-        const isStation = selectedMemberNodeIds.has(el.id) || nodeLooksLikeStation(tags);
-        if (!isStation) return;
+        if (!selectedMemberNodeIds.has(el.id)) return;
+        if (isExcludedUrbanRail(tags)) return;
         const name = tags['name:ko'] || tags.name || tags.official_name || '';
         if (!name) return;
         const locKey = name.replace(/역$/, '').trim();
@@ -734,11 +766,12 @@
         const locKey = String(station.name).replace(/역$/, '').trim();
         if (stationSeenByLoc.has(locKey)) return;
         stationSeenByLoc.add(locKey);
+        if (isExcludedUrbanRail({ name: station.name || station.nameKo || '', ref: station.line || '' })) return;
         stations.push({
           name: station.name || station.nameKo || '',
           lon: Number(station.lon),
           lat: Number(station.lat),
-          line: station.line || '',
+          line: normalizeLineName(station.line || ''),
           color: station.color || resolveColor({ ref: station.line || '', name: station.line || '' }),
         });
       });
@@ -752,10 +785,9 @@
         DATA_URL,
         'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
       ];
-      let lastError = null;
-      for (const endpoint of endpoints) {
+      const requests = endpoints.map((endpoint) => new Promise(async (resolve, reject) => {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 12000);
+        const timer = setTimeout(() => controller.abort(), 55000);
         try {
           const response = await fetch(endpoint, {
             method: 'POST',
@@ -766,21 +798,35 @@
           });
           clearTimeout(timer);
           if (!response.ok) throw new Error('HTTP ' + response.status + ' @ ' + endpoint);
-          return await response.json();
+          resolve(await response.json());
         } catch (error) {
           clearTimeout(timer);
-          lastError = error;
           console.warn('overpass endpoint failed:', endpoint, error);
+          reject(error);
         }
+      }));
+      if (typeof Promise.any === 'function') {
+        return Promise.any(requests);
       }
-      throw lastError || new Error('No overpass endpoint available');
+      return new Promise((resolve, reject) => {
+        let rejected = 0;
+        let lastError = null;
+        requests.forEach((request) => {
+          request.then(resolve).catch((error) => {
+            rejected += 1;
+            lastError = error;
+            if (rejected >= requests.length) reject(lastError || new Error('No overpass endpoint available'));
+          });
+        });
+      });
     }
 
     function getFallbackDataset() {
       const fallbackStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
+      const globalData = window.KR_SUBWAY_OVERLAY_DATA || null;
       const cached = parseCached();
-      const cachedLines = Array.isArray(cached?.data?.lines) ? cached.data.lines : [];
-      const cachedStations = Array.isArray(cached?.data?.stations) ? cached.data.stations : [];
+      const cachedLines = Array.isArray(globalData?.lines) ? globalData.lines : (Array.isArray(cached?.data?.lines) ? cached.data.lines : []);
+      const cachedStations = Array.isArray(globalData?.stations) ? globalData.stations : (Array.isArray(cached?.data?.stations) ? cached.data.stations : []);
       return {
         lines: cachedLines,
         stations: [
@@ -798,51 +844,53 @@
     }
 
     let hasLoadedOnce = false;
+    let loadPromise = null;
 
     async function load() {
-      // ① 정적/기존 캐시 데이터 즉시 표시 — 항상 실행, 오류 격리
-      try {
-        const fallback = getFallbackDataset();
-        if ((fallback.stations || []).length || (fallback.lines || []).length) {
-          addEntities(fallback);
-          if ((fallback.stations || []).length >= 100) storeCache(fallback);
-        }
-      } catch (e) { console.warn('subway static fallback failed:', e); }
-
-      // ② 유효 캐시가 있으면 즉시 교체
-      let cached = null;
-      try {
-        cached = parseCached();
-        if (cached && (((cached.data || {}).stations || []).length || ((cached.data || {}).lines || []).length)) {
-          addEntities(cached.data);
-          if (!cached.expired) {
-            hasLoadedOnce = true;
-            return;
+      if (loadPromise) return loadPromise;
+      loadPromise = (async () => {
+        // ① 유효 캐시가 있으면 즉시 표시 (캐시에 노선 데이터가 있는 경우만)
+        let cached = null;
+        try {
+          cached = parseCached();
+          if (cached && ((cached.data || {}).lines || []).length > 0) {
+            addEntities(cached.data);
+            window.KR_SUBWAY_OVERLAY_DATA = cached.data;
+            if (!cached.expired) {
+              hasLoadedOnce = true;
+              return;
+            }
           }
-        }
-      } catch (e) { console.warn('subway cache load failed:', e); }
+        } catch (e) { console.warn('subway cache load failed:', e); }
 
-      // ③ 백그라운드 Overpass 갱신
-      const query = `
-[out:json][timeout:45];
-area["ISO3166-1"="KR"][admin_level=2]->.searchArea;
+        // ② Overpass 갱신 — 완전한 데이터가 도착할 때까지 기다렸다가 한 번에 표시
+        // bbox: 한국 전체 영역 (제주 포함) — area 조회보다 훨씬 빠름
+        const query = `
+[out:json][timeout:50][bbox:33.0,124.5,38.7,130.0];
 (
-  relation(area.searchArea)["type"="route"]["route"~"subway|light_rail|monorail"];
-  relation(area.searchArea)["type"="route"]["route"="train"]["name"~"GTX|공항철도|신분당|수인|분당|경의|중앙|경춘|서해|신림|우이|김포|의정부|에버라인|인천|부산|대구|대전|광주|동해|도시철도|수도권 전철", i];
+  relation["type"="route"]["route"~"subway|light_rail|monorail"];
+  relation["type"="route"]["route"="train"]["name"~"GTX|공항철도|신분당|수인|분당|경의|중앙|경춘|서해|신림|우이|김포|의정부|에버라인|인천|부산|대구|대전|광주|동해|도시철도|수도권 전철", i];
 );
 out body;
 >;
 out geom qt;`;
-      try {
-        const raw = await fetchOverpass(query);
-        const transformed = transformOverpass(raw);
-        if (((transformed.lines || []).length || (transformed.stations || []).length)) {
-          addEntities(transformed);
-          storeCache(transformed);
-          hasLoadedOnce = true;
+        try {
+          const raw = await fetchOverpass(query);
+          const transformed = transformOverpass(raw);
+          if (((transformed.lines || []).length || (transformed.stations || []).length)) {
+            addEntities(transformed);
+            storeCache(transformed);
+            hasLoadedOnce = true;
+          }
+        } catch (error) {
+          console.warn('Korea subway Overpass failed, will retry on next setVisible:', error);
+          // hasLoadedOnce = false 유지 → 다음 setVisible(true) 시 자동 재시도
         }
-      } catch (error) {
-        console.warn('Korea subway Overpass failed, keeping current display:', error);
+      })();
+      try {
+        await loadPromise;
+      } finally {
+        loadPromise = null;
       }
     }
 
@@ -851,7 +899,12 @@ out geom qt;`;
     return {
       setVisible(visible) {
         dataSource.show = !!visible;
-        if (visible && !hasLoadedOnce) load();
+        if (visible) {
+          // 이미 엔티티가 있으면 재추가하지 않음 (위성↔일반 반복 전환 시 노선 사라짐 버그 방지)
+          const hasEntities = dataSource.entities.values.length > 0;
+          if (!hasEntities && !hasLoadedOnce) load();
+          else if (!hasLoadedOnce) load();
+        }
         viewer.scene.requestRender();
       },
       reload() { return load(); },
@@ -866,9 +919,12 @@ out geom qt;`;
     scene.globe.baseColor = Cesium.Color.BLACK;
     scene.globe.enableLighting = false;
     scene.globe.depthTestAgainstTerrain = false;
-    scene.globe.maximumScreenSpaceError = isMobile ? 1.5 : 1.2;
+    // 타일 로딩 속도 핵심: 낮을수록 고품질이지만 느림. 2.5~3.5가 속도/품질 최적 균형
+    scene.globe.maximumScreenSpaceError = isMobile ? 3.5 : 2.5;
     scene.globe.preloadAncestors = true;
-    scene.globe.loadingDescendantsLimit = isMobile ? 4 : 8;
+    scene.globe.loadingDescendantsLimit = isMobile ? 6 : 12;
+    // 타일 캐시 크기 증가: 스타일 변경/확대·축소 시 재다운로드 방지
+    scene.globe.tileCacheSize = 400;
     scene.skyAtmosphere.show = false;
     scene.sun.show = false;
     scene.moon.show = false;
@@ -877,10 +933,12 @@ out geom qt;`;
     scene.highDynamicRange = false;
     scene.requestRenderMode = true;
     scene.maximumRenderTimeChange = Infinity;
-    if (scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = true;
-    scene.fxaa = true;
+    // fxaa 비활성화: 지도 뷰에서 체감 차이 없고 GPU 비용 절감
+    if (scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = false;
+    scene.fxaa = false;
 
-    viewer.resolutionScale = isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 1.4);
+    // resolutionScale 1.0 고정: HiDPI 과렌더링 방지 (1.4 → 1.0이면 픽셀 수 50% 감소)
+    viewer.resolutionScale = 1.0;
     viewer.targetFrameRate = isMobile ? 45 : 60;
 
     const controller = scene.screenSpaceCameraController;
@@ -894,20 +952,34 @@ out geom qt;`;
     controller.maximumMovementRatio = isMobile ? 0.08 : 0.16;
     controller.zoomEventTypes = [Cesium.CameraEventType.WHEEL, Cesium.CameraEventType.PINCH];
 
-    viewer.camera.percentageChanged = 0.01;
+    viewer.camera.percentageChanged = 0.05; // 0.01 → 0.05: 카메라 변경 이벤트 빈도 감소
   }
 
   function wireLoading(scene) {
     const loading = document.getElementById('loading');
+    if (!loading) return;
     let dismissed = false;
+
     function dismiss() {
       if (dismissed) return;
       dismissed = true;
       loading.classList.add('out');
       setTimeout(() => loading.classList.add('gone'), 700);
     }
-    scene.globe.tileLoadProgressEvent.addEventListener(count => { if (count === 0) dismiss(); });
-    setTimeout(dismiss, 4500);
+
+    // ① 타일 로딩 완료 시 즉시 dismiss
+    scene.globe.tileLoadProgressEvent.addEventListener(count => {
+      if (count === 0) dismiss();
+    });
+
+    // ② 2초 후 타일 개수가 충분히 적으면 dismiss (requestRenderMode에서 count=0 미도달 방지)
+    setTimeout(() => {
+      // 타일이 아직 로딩 중이어도 화면에 지구가 보이면 dismiss
+      if (!dismissed) dismiss();
+    }, 2000);
+
+    // ③ 어떤 경우에도 5초 후 강제 dismiss
+    setTimeout(dismiss, 5000);
   }
 
   function wireInfoBar(viewer, sharedState) {
@@ -1843,7 +1915,35 @@ out geom qt;`;
     controller.inertiaSpin = 0.28;
     controller.inertiaTranslate = 0.35;
     controller.inertiaZoom = 0.35;
+    controller.enableTilt = false;
+    controller.enableLook = false;
+    controller.tiltEventTypes = [];
+    controller.lookEventTypes = [];
     viewer.scene.canvas.style.touchAction = 'none';
+
+    // 모바일도 PC처럼 정북향 + 탑다운 각도 고정
+    let lockCameraSync = false;
+    const syncTopDownCamera = () => {
+      if (lockCameraSync) return;
+      const position = viewer.camera.positionCartographic;
+      if (!position) return;
+      const headingDiff = Math.abs(Cesium.Math.zeroToTwoPi(viewer.camera.heading || 0));
+      const pitchDiff = Math.abs((viewer.camera.pitch || 0) - Cesium.Math.toRadians(-90));
+      if (headingDiff < Cesium.Math.toRadians(0.2) && pitchDiff < Cesium.Math.toRadians(0.2)) return;
+      lockCameraSync = true;
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromRadians(position.longitude, position.latitude, position.height),
+        orientation: {
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-90),
+          roll: 0,
+        },
+      });
+      lockCameraSync = false;
+    };
+    viewer.camera.changed.addEventListener(syncTopDownCamera);
+    viewer.camera.moveEnd.addEventListener(syncTopDownCamera);
+    syncTopDownCamera();
 
     // 터치 선택 효과(파란 하이라이트) 방지
     viewer.scene.canvas.style.webkitTapHighlightColor = 'transparent';
@@ -1852,13 +1952,8 @@ out geom qt;`;
     document.body.style.userSelect = 'none';
     document.body.style.webkitUserSelect = 'none';
 
-    let pinchActive = false;
-    viewer.scene.canvas.addEventListener('touchstart', event => {
-      pinchActive = event.touches.length >= 2;
-    }, { passive: true });
-    viewer.scene.canvas.addEventListener('touchend', event => {
-      pinchActive = event.touches.length >= 2;
-    }, { passive: true });
+    viewer.scene.canvas.addEventListener('touchstart', () => {}, { passive: true });
+    viewer.scene.canvas.addEventListener('touchend', () => {}, { passive: true });
     document.body.classList.toggle('is-touch', true);
   }
 

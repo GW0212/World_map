@@ -179,7 +179,7 @@
   function hydrateStationsFromOverlayCache() {
     if (indexedStations.length) return;
     try {
-      const cacheKeys = ['worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
+      const cacheKeys = ['worldmap:korea-subway-overlay:v34', 'worldmap:korea-subway-overlay:v33', 'worldmap:korea-subway-overlay:v26', 'worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
       let parsed = null;
       let newest = 0;
       cacheKeys.forEach((cacheKey) => {
