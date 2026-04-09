@@ -849,19 +849,30 @@
     async function load() {
       if (loadPromise) return loadPromise;
       loadPromise = (async () => {
-        // ① 유효 캐시가 있으면 즉시 표시 (캐시에 노선 데이터가 있는 경우만)
+        // ① 캐시나 정적 시드 데이터가 있으면 먼저 즉시 표시
         let cached = null;
         try {
           cached = parseCached();
-          if (cached && ((cached.data || {}).lines || []).length > 0) {
+          if (cached && (((cached.data || {}).lines || []).length > 0 || ((cached.data || {}).stations || []).length > 0)) {
             addEntities(cached.data);
             window.KR_SUBWAY_OVERLAY_DATA = cached.data;
             if (!cached.expired) {
               hasLoadedOnce = true;
               return;
             }
+          } else {
+            const fallbackDataset = getFallbackDataset();
+            if (((fallbackDataset.lines || []).length > 0 || (fallbackDataset.stations || []).length > 0)) {
+              addEntities(fallbackDataset);
+            }
           }
-        } catch (e) { console.warn('subway cache load failed:', e); }
+        } catch (e) {
+          console.warn('subway cache load failed:', e);
+          const fallbackDataset = getFallbackDataset();
+          if (((fallbackDataset.lines || []).length > 0 || (fallbackDataset.stations || []).length > 0)) {
+            addEntities(fallbackDataset);
+          }
+        }
 
         // ② Overpass 갱신 — 완전한 데이터가 도착할 때까지 기다렸다가 한 번에 표시
         // bbox: 한국 전체 영역 (제주 포함) — area 조회보다 훨씬 빠름
@@ -881,10 +892,20 @@ out geom qt;`;
             addEntities(transformed);
             storeCache(transformed);
             hasLoadedOnce = true;
+          } else {
+            const fallbackDataset = getFallbackDataset();
+            if (((fallbackDataset.lines || []).length > 0 || (fallbackDataset.stations || []).length > 0)) {
+              addEntities(fallbackDataset);
+            }
           }
         } catch (error) {
-          console.warn('Korea subway Overpass failed, will retry on next setVisible:', error);
-          // hasLoadedOnce = false 유지 → 다음 setVisible(true) 시 자동 재시도
+          console.warn('Korea subway Overpass failed, using fallback dataset:', error);
+          const fallbackDataset = getFallbackDataset();
+          if (((fallbackDataset.lines || []).length > 0 || (fallbackDataset.stations || []).length > 0)) {
+            addEntities(fallbackDataset);
+            hasLoadedOnce = true;
+          }
+          // 이후 일반 지도 재진입 시에도 필요하면 reload 가능
         }
       })();
       try {
@@ -900,10 +921,15 @@ out geom qt;`;
       setVisible(visible) {
         dataSource.show = !!visible;
         if (visible) {
-          // 이미 엔티티가 있으면 재추가하지 않음 (위성↔일반 반복 전환 시 노선 사라짐 버그 방지)
+          // 일반 지도 진입 시 엔티티가 비어 있으면 우선 폴백 데이터를 즉시 반영
           const hasEntities = dataSource.entities.values.length > 0;
-          if (!hasEntities && !hasLoadedOnce) load();
-          else if (!hasLoadedOnce) load();
+          if (!hasEntities) {
+            const fallbackDataset = getFallbackDataset();
+            if (((fallbackDataset.lines || []).length > 0 || (fallbackDataset.stations || []).length > 0)) {
+              addEntities(fallbackDataset);
+            }
+          }
+          if (!hasLoadedOnce) load();
         }
         viewer.scene.requestRender();
       },
@@ -943,13 +969,13 @@ out geom qt;`;
 
     const controller = scene.screenSpaceCameraController;
     controller.maximumZoomDistance = HOME_VIEW.alt;
-    controller.minimumZoomDistance = 500;
+    controller.minimumZoomDistance = isMobile ? 120 : 500;
     controller.enableCollisionDetection = false;
     controller.maximumTiltAngle = Cesium.Math.toRadians(90);
     controller.inertiaSpin = isMobile ? 0.4 : 0.62;
     controller.inertiaTranslate = isMobile ? 0.48 : 0.7;
-    controller.inertiaZoom = isMobile ? 0.45 : 0.64;
-    controller.maximumMovementRatio = isMobile ? 0.08 : 0.16;
+    controller.inertiaZoom = isMobile ? 0.22 : 0.64;
+    controller.maximumMovementRatio = isMobile ? 0.2 : 0.16;
     controller.zoomEventTypes = [Cesium.CameraEventType.WHEEL, Cesium.CameraEventType.PINCH];
 
     viewer.camera.percentageChanged = 0.05; // 0.01 → 0.05: 카메라 변경 이벤트 빈도 감소
@@ -1312,10 +1338,10 @@ out geom qt;`;
     function flyToResult(item) {
       const fly = window.WorldSearch.getFlyToOptions(item);
       const safeLat = Cesium.Math.clamp(item.lat, -MAX_VIEW_LATITUDE, MAX_VIEW_LATITUDE);
-      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.45, 12: 0.18, 13: 0.08, 14: 0.04 };
+      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.45, 12: 0.18, 13: 0.08, 14: 0.04, 15: 0.02 };
       // 국가는 zoom 6, 나머지는 모두 역과 동일한 zoom 14
-      const defaultZoom = item.type === 'country' ? 6 : 14;
-      const zoomKey = Math.max(5, Math.min(14, Number(item.zoom && item.type === 'country' ? item.zoom : defaultZoom)));
+      const defaultZoom = item.type === 'country' ? 6 : ((item.zoom && item.zoom >= 15) ? 15 : 14);
+      const zoomKey = Math.max(5, Math.min(15, Number(item.zoom && item.type === 'country' ? item.zoom : defaultZoom)));
       const latSpan = spanByZoom[zoomKey] ?? 0.04;
       const lonSpan = latSpan / Math.max(0.35, Math.cos(Cesium.Math.toRadians(safeLat)));
       const rectangle = Cesium.Rectangle.fromDegrees(
@@ -1917,8 +1943,10 @@ out geom qt;`;
     controller.inertiaZoom = 0.35;
     controller.enableTilt = false;
     controller.enableLook = false;
+    controller.enableRotate = false;
     controller.tiltEventTypes = [];
     controller.lookEventTypes = [];
+    controller.rotateEventTypes = [];
     viewer.scene.canvas.style.touchAction = 'none';
 
     // 모바일도 PC처럼 정북향 + 탑다운 각도 고정
@@ -1927,9 +1955,11 @@ out geom qt;`;
       if (lockCameraSync) return;
       const position = viewer.camera.positionCartographic;
       if (!position) return;
-      const headingDiff = Math.abs(Cesium.Math.zeroToTwoPi(viewer.camera.heading || 0));
+      const normalizedHeading = Cesium.Math.negativePiToPi(viewer.camera.heading || 0);
+      const headingDiff = Math.abs(normalizedHeading);
       const pitchDiff = Math.abs((viewer.camera.pitch || 0) - Cesium.Math.toRadians(-90));
-      if (headingDiff < Cesium.Math.toRadians(0.2) && pitchDiff < Cesium.Math.toRadians(0.2)) return;
+      const rollDiff = Math.abs(viewer.camera.roll || 0);
+      if (headingDiff < Cesium.Math.toRadians(0.05) && pitchDiff < Cesium.Math.toRadians(0.05) && rollDiff < Cesium.Math.toRadians(0.05)) return;
       lockCameraSync = true;
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromRadians(position.longitude, position.latitude, position.height),
@@ -1942,6 +1972,11 @@ out geom qt;`;
       lockCameraSync = false;
     };
     viewer.camera.changed.addEventListener(syncTopDownCamera);
+    viewer.camera.moveStart.addEventListener(() => {
+      if (controller.enableRotate) controller.enableRotate = false;
+      if (controller.enableTilt) controller.enableTilt = false;
+      if (controller.enableLook) controller.enableLook = false;
+    });
     viewer.camera.moveEnd.addEventListener(syncTopDownCamera);
     syncTopDownCamera();
 
