@@ -1142,6 +1142,7 @@ out geom qt;`;
     const clearBtn = document.getElementById('srch-clear');
     const results = document.getElementById('srch-results');
     const countLabel = document.getElementById('srch-count');
+    const wrap = document.getElementById('search-wrap');
 
     let isOpen = false;
     let currentItems = [];
@@ -1154,12 +1155,18 @@ out geom qt;`;
       results.style.width = width + 'px';
     }
 
+    function syncCollapsedState() {
+      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      wrap.classList.toggle('is-collapsed', isMobile && !isOpen);
+    }
+
     function openPanel() {
       isOpen = true;
       row.classList.add('is-open');
       panel.classList.add('is-open');
       btn.classList.add('is-open');
       btn.setAttribute('aria-expanded', 'true');
+      syncCollapsedState();
       requestAnimationFrame(syncResultsWidth);
       setTimeout(() => input.focus(), 50);
     }
@@ -1173,6 +1180,7 @@ out geom qt;`;
       results.style.display = 'none';
       activeIndex = -1;
       currentItems = [];
+      syncCollapsedState();
     }
 
     function renderResults(items) {
@@ -1322,13 +1330,16 @@ out geom qt;`;
     });
 
     document.addEventListener('click', event => {
-      const wrap = document.getElementById('search-wrap');
       if (!wrap.contains(event.target) && isOpen) {
         results.style.display = 'none';
         row.classList.remove('has-results');
       }
     });
-    window.addEventListener('resize', syncResultsWidth);
+    window.addEventListener('resize', () => {
+      syncCollapsedState();
+      syncResultsWidth();
+    });
+    syncCollapsedState();
     syncResultsWidth();
   }
 
