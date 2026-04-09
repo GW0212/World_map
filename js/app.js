@@ -849,7 +849,7 @@
     async function load() {
       if (loadPromise) return loadPromise;
       loadPromise = (async () => {
-        // ① 유효 캐시가 있으면 즉시 표시 (캐시에 노선 데이터가 있는 경우만)
+        // ① 캐시/폴백 데이터를 먼저 즉시 표시해 오버레이 공백 상태를 방지
         let cached = null;
         try {
           cached = parseCached();
@@ -860,8 +860,25 @@
               hasLoadedOnce = true;
               return;
             }
+          } else {
+            const fallbackDataset = getFallbackDataset();
+            if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
+              addEntities(fallbackDataset);
+              window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
+            }
           }
-        } catch (e) { console.warn('subway cache load failed:', e); }
+        } catch (e) {
+          console.warn('subway cache load failed:', e);
+          try {
+            const fallbackDataset = getFallbackDataset();
+            if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
+              addEntities(fallbackDataset);
+              window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
+            }
+          } catch (fallbackError) {
+            console.warn('subway fallback load failed:', fallbackError);
+          }
+        }
 
         // ② Overpass 갱신 — 완전한 데이터가 도착할 때까지 기다렸다가 한 번에 표시
         // bbox: 한국 전체 영역 (제주 포함) — area 조회보다 훨씬 빠름
@@ -943,13 +960,14 @@ out geom qt;`;
 
     const controller = scene.screenSpaceCameraController;
     controller.maximumZoomDistance = HOME_VIEW.alt;
-    controller.minimumZoomDistance = 500;
+    controller.minimumZoomDistance = isMobile ? 120 : 500;
     controller.enableCollisionDetection = false;
     controller.maximumTiltAngle = Cesium.Math.toRadians(90);
-    controller.inertiaSpin = isMobile ? 0.4 : 0.62;
-    controller.inertiaTranslate = isMobile ? 0.48 : 0.7;
-    controller.inertiaZoom = isMobile ? 0.45 : 0.64;
-    controller.maximumMovementRatio = isMobile ? 0.08 : 0.16;
+    controller.inertiaSpin = isMobile ? 0.18 : 0.62;
+    controller.inertiaTranslate = isMobile ? 0.34 : 0.7;
+    controller.inertiaZoom = isMobile ? 0.22 : 0.64;
+    controller.maximumMovementRatio = isMobile ? 0.12 : 0.16;
+    controller.zoomFactor = isMobile ? 8.5 : 5.0;
     controller.zoomEventTypes = [Cesium.CameraEventType.WHEEL, Cesium.CameraEventType.PINCH];
 
     viewer.camera.percentageChanged = 0.05; // 0.01 → 0.05: 카메라 변경 이벤트 빈도 감소
@@ -1312,12 +1330,14 @@ out geom qt;`;
     function flyToResult(item) {
       const fly = window.WorldSearch.getFlyToOptions(item);
       const safeLat = Cesium.Math.clamp(item.lat, -MAX_VIEW_LATITUDE, MAX_VIEW_LATITUDE);
-      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.45, 12: 0.18, 13: 0.08, 14: 0.04 };
-      // 국가는 zoom 6, 나머지는 모두 역과 동일한 zoom 14
-      const defaultZoom = item.type === 'country' ? 6 : 14;
-      const zoomKey = Math.max(5, Math.min(14, Number(item.zoom && item.type === 'country' ? item.zoom : defaultZoom)));
+      const isKrLocalArea = item.type !== 'country' && String(item.countryCode || '').toUpperCase() === 'KR' && /(동|읍|면|리)$/u.test(String(item.nameKo || item.nameEn || item.name || '').trim());
+      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.45, 12: 0.18, 13: 0.08, 14: 0.04, 15: 0.02, 16: 0.012 };
+      // 국가는 zoom 6, 일반 위치는 14, 한국 동/읍/면/리는 더 가깝게 진입
+      const defaultZoom = item.type === 'country' ? 6 : (isKrLocalArea ? 16 : 14);
+      const zoomKey = Math.max(5, Math.min(16, Number(item.type === 'country' ? (item.zoom || defaultZoom) : defaultZoom)));
       const latSpan = spanByZoom[zoomKey] ?? 0.04;
       const lonSpan = latSpan / Math.max(0.35, Math.cos(Cesium.Math.toRadians(safeLat)));
+      const finalAltitude = isKrLocalArea ? 650 : (item.type === 'station' ? 1500 : fly.altitude);
       const rectangle = Cesium.Rectangle.fromDegrees(
         item.lon - lonSpan / 2,
         Cesium.Math.clamp(safeLat - latSpan / 2, -MAX_VIEW_LATITUDE, MAX_VIEW_LATITUDE),
@@ -1331,7 +1351,7 @@ out geom qt;`;
         easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
         complete: () => {
           viewer.camera.setView({
-            destination: Cesium.Cartesian3.fromDegrees(item.lon, safeLat, fly.altitude),
+            destination: Cesium.Cartesian3.fromDegrees(item.lon, safeLat, finalAltitude),
             orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
           });
         },
@@ -1911,25 +1931,31 @@ out geom qt;`;
     const isMobile = window.matchMedia('(max-width: 768px)').matches;
     if (!isMobile) return;
     const controller = viewer.scene.screenSpaceCameraController;
+    const canvas = viewer.scene.canvas;
     controller.bounceAnimationTime = 0;
-    controller.inertiaSpin = 0.28;
-    controller.inertiaTranslate = 0.35;
-    controller.inertiaZoom = 0.35;
+    controller.inertiaSpin = 0.12;
+    controller.inertiaTranslate = 0.26;
+    controller.inertiaZoom = 0.18;
     controller.enableTilt = false;
     controller.enableLook = false;
+    controller.enableRotate = true;
     controller.tiltEventTypes = [];
     controller.lookEventTypes = [];
-    viewer.scene.canvas.style.touchAction = 'none';
+    controller.zoomFactor = 9.0;
+    canvas.style.touchAction = 'none';
 
     // 모바일도 PC처럼 정북향 + 탑다운 각도 고정
     let lockCameraSync = false;
+    let syncQueued = false;
     const syncTopDownCamera = () => {
       if (lockCameraSync) return;
       const position = viewer.camera.positionCartographic;
       if (!position) return;
-      const headingDiff = Math.abs(Cesium.Math.zeroToTwoPi(viewer.camera.heading || 0));
-      const pitchDiff = Math.abs((viewer.camera.pitch || 0) - Cesium.Math.toRadians(-90));
-      if (headingDiff < Cesium.Math.toRadians(0.2) && pitchDiff < Cesium.Math.toRadians(0.2)) return;
+      const heading = Cesium.Math.negativePiToPi(viewer.camera.heading || 0);
+      const pitch = viewer.camera.pitch || Cesium.Math.toRadians(-90);
+      const headingDiff = Math.abs(heading);
+      const pitchDiff = Math.abs(pitch - Cesium.Math.toRadians(-90));
+      if (headingDiff < Cesium.Math.toRadians(0.05) && pitchDiff < Cesium.Math.toRadians(0.05)) return;
       lockCameraSync = true;
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromRadians(position.longitude, position.latitude, position.height),
@@ -1941,19 +1967,41 @@ out geom qt;`;
       });
       lockCameraSync = false;
     };
-    viewer.camera.changed.addEventListener(syncTopDownCamera);
+    const queueTopDownSync = () => {
+      if (syncQueued) return;
+      syncQueued = true;
+      requestAnimationFrame(() => {
+        syncQueued = false;
+        syncTopDownCamera();
+      });
+    };
+    viewer.camera.changed.addEventListener(queueTopDownSync);
     viewer.camera.moveEnd.addEventListener(syncTopDownCamera);
     syncTopDownCamera();
 
-    // 터치 선택 효과(파란 하이라이트) 방지
-    viewer.scene.canvas.style.webkitTapHighlightColor = 'transparent';
-    viewer.scene.canvas.style.userSelect = 'none';
-    viewer.scene.canvas.style.webkitUserSelect = 'none';
+    // 모바일 브라우저 pull-to-refresh / 확대 제스처로 UI가 사라지는 현상 방지
+    let touchCount = 0;
+    document.documentElement.style.overscrollBehavior = 'none';
+    document.body.style.overscrollBehavior = 'none';
     document.body.style.userSelect = 'none';
     document.body.style.webkitUserSelect = 'none';
+    canvas.style.webkitTapHighlightColor = 'transparent';
+    canvas.style.userSelect = 'none';
+    canvas.style.webkitUserSelect = 'none';
 
-    viewer.scene.canvas.addEventListener('touchstart', () => {}, { passive: true });
-    viewer.scene.canvas.addEventListener('touchend', () => {}, { passive: true });
+    const updateTouchCount = (event) => { touchCount = event.touches ? event.touches.length : 0; };
+    window.addEventListener('touchstart', updateTouchCount, { passive: true });
+    window.addEventListener('touchend', updateTouchCount, { passive: true });
+    window.addEventListener('touchcancel', () => { touchCount = 0; }, { passive: true });
+    window.addEventListener('touchmove', (event) => {
+      if (touchCount >= 2 || window.scrollY <= 0) event.preventDefault();
+    }, { passive: false });
+    window.addEventListener('pageshow', () => {
+      queueTopDownSync();
+      viewer.resize();
+      viewer.scene.requestRender();
+    });
+
     document.body.classList.toggle('is-touch', true);
   }
 

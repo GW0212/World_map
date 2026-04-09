@@ -13,9 +13,9 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     * { -webkit-tap-highlight-color: transparent; }
     body { -webkit-touch-callout: none; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-    body { color: #fff; }
-    #cesiumContainer { width: 100vw; height: 100vh; }
+    html, body { width: 100%; height: 100%; min-height: 100dvh; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overscroll-behavior: none; }
+    body { color: #fff; position: fixed; inset: 0; }
+    #cesiumContainer { width: 100vw; height: 100vh; height: 100dvh; }
     .cesium-credit-container, .cesium-widget-credits, .cesium-credit-expand-link { display: none !important; }
     button, input, select { font: inherit; }
     button, a, .r-item { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -132,7 +132,7 @@
     .ib-v { font-size: clamp(9px, 1vw, 11px); color: #0f172a; font-weight: 800; white-space: nowrap; line-height: 1.1; }
 
     #zoom-ind {
-      position: fixed; right: 15px; bottom: 326px; z-index: 20;
+      position: fixed; right: 18px; bottom: 326px; z-index: 20;
       display: flex; flex-direction: column; align-items: center; gap: 6px;
       background: rgba(15,23,42,.72); border-radius: 20px; padding: 10px 6px;
       backdrop-filter: blur(8px); box-shadow: 0 4px 16px rgba(0,0,0,.3);
@@ -417,11 +417,11 @@
   <button id="globe-home-btn" type="button" aria-label="홈 화면으로 이동" title="지구 보기"><img src="earth-loading.png" alt="지구"></button>
 
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Cesium.js"></script>
-  <script src="data/countries.js?v=20260409b"></script>
-  <script src="data/regions.js?v=20260409b"></script>
-  <script src="data/cities.js?v=20260409b"></script>
-  <script src="data/subway_stations_kr.js?v=20260409b"></script>
-  <script src="js/search-engine.js?v=20260409b"></script>
-  <script src="js/app.js?v=20260409b"></script>
+  <script src="data/countries.js?v=20260409c"></script>
+  <script src="data/regions.js?v=20260409c"></script>
+  <script src="data/cities.js?v=20260409c"></script>
+  <script src="data/subway_stations_kr.js?v=20260409c"></script>
+  <script src="js/search-engine.js?v=20260409c"></script>
+  <script src="js/app.js?v=20260409c"></script>
 </body>
 </html>
