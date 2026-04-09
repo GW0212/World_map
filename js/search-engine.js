@@ -1071,12 +1071,13 @@ out center tags;`;
   }
 
   function getFlyToOptions(item) {
-    if (item.type === 'station') return { altitude: 3200, pitch: -90, zoom: 12 };
+    if (item.type === 'station') return { altitude: 1500, pitch: -90, zoom: 14 };
     if (item.type === 'country') return { altitude: 2400000, pitch: -90, zoom: 6 };
-    if (item.isCapital) return { altitude: 95000, pitch: -90, zoom: 10 };
-    if (item.zoom >= 11) return { altitude: 60000, pitch: -90, zoom: item.zoom };
-    if (item.zoom >= 10) return { altitude: 85000, pitch: -90, zoom: item.zoom };
-    return { altitude: 150000, pitch: -90, zoom: item.zoom || 10 };
+    // zoom 기반 고도 매핑
+    const altByZoom = { 14: 1500, 13: 3500, 12: 7000, 11: 18000, 10: 40000, 9: 85000, 8: 170000, 7: 350000, 6: 700000 };
+    const z = item.zoom || 10;
+    const alt = altByZoom[Math.round(z)] || 40000;
+    return { altitude: alt, pitch: -90, zoom: z };
   }
 
   function haversineKm(lat1, lon1, lat2, lon2) {

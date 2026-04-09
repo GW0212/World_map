@@ -215,7 +215,8 @@
       overlays.cartoLightLabels.alpha = isRoadmap ? 0.82 : 0;
       overlays.railOverlay.show = false;
       overlays.railOverlay.alpha = 0;
-      if (koreaSubwayOverlay) koreaSubwayOverlay.setVisible(style === 'roadmap');
+      if (koreaSubwayOverlay && style === 'roadmap') koreaSubwayOverlay.setVisible(true);
+      // satellite 등 다른 스타일에선 지하철 숨김 (단, 타일 오류 fallback에선 유지)
       viewer.scene.requestRender();
     }
 
@@ -236,7 +237,8 @@
             layer.alpha = active ? 1 : 0;
           });
           applyBaseLayerTuning('satellite');
-          syncOverlayVisibility('satellite');
+          // 타일 오류로 satellite 전환 시에도 지하철역 표시 유지
+          // syncOverlayVisibility('satellite'); — 제거
           viewer.scene.requestRender();
         };
         ['roadmap', 'terrain'].forEach((name) => {
@@ -265,9 +267,49 @@
     return manager;
   }
 
+
+  function createCloudLayer(viewer) {
+    const earthRadius = 6378137.0;
+    const cloudScale = 1.012;
+    const cloudAlphaBase = 0.78;
+    const cloudEntity = viewer.entities.add({
+      name: 'animated-cloud-layer',
+      position: Cesium.Cartesian3.ZERO,
+      orientation: new Cesium.CallbackProperty(() => {
+        const seconds = Date.now() / 1000;
+        const heading = Cesium.Math.toRadians((seconds * 0.65) % 360);
+        return Cesium.Transforms.headingPitchRollQuaternion(
+          Cesium.Cartesian3.ZERO,
+          new Cesium.HeadingPitchRoll(heading, 0, 0)
+        );
+      }, false),
+      ellipsoid: {
+        radii: new Cesium.Cartesian3(earthRadius * cloudScale, earthRadius * cloudScale, earthRadius * cloudScale),
+        material: new Cesium.ImageMaterialProperty({
+          image: 'clouds_overlay.png',
+          transparent: true,
+          color: new Cesium.CallbackProperty(() => {
+            const height = (viewer && viewer.camera && viewer.camera.positionCartographic && viewer.camera.positionCartographic.height) || 0;
+            const alpha = height < 1500000 ? 0.34 : height < 5000000 ? 0.52 : cloudAlphaBase;
+            return Cesium.Color.WHITE.withAlpha(alpha);
+          }, false),
+        }),
+        outline: false,
+        subdivisions: 128,
+        stackPartitions: 128,
+        slicePartitions: 128,
+      },
+    });
+    cloudEntity.show = true;
+    if (viewer.scene && viewer.scene.postRender) {
+      viewer.scene.postRender.addEventListener(() => viewer.scene.requestRender());
+    }
+    return cloudEntity;
+  }
+
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEY = 'worldmap:korea-subway-overlay:v2';
+    const CACHE_KEY = 'worldmap:korea-subway-overlay:v20';
     const CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
     dataSource.show = false;
@@ -310,8 +352,7 @@
         if (!raw) return null;
         const cached = JSON.parse(raw);
         if (!cached || !cached.timestamp || !cached.data) return null;
-        if (Date.now() - cached.timestamp > CACHE_TTL) return null;
-        return cached.data;
+        return { data: cached.data, expired: Date.now() - cached.timestamp > CACHE_TTL };
       } catch (error) {
         console.warn('subway cache parse failed', error);
         return null;
@@ -326,8 +367,23 @@
       }
     }
 
+    // 병합 비교용 키: 괄호 제거 + 역 제거
     function getStationLabelKey(name = '') {
-      return String(name).trim().replace(/\s+/g, ' ');
+      return String(name).trim()
+        .replace(/\s*[\(（][^\)）]*[\)）]/g, '')
+        .replace(/역$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    // 표시용 이름: 괄호 제거 + 역 suffix 보장
+    function normalizeStationDisplayName(name = '') {
+      const cleaned = String(name).trim()
+        .replace(/\s*[\(（][^\)）]*[\)）]/g, '')
+        .replace(/역$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return cleaned ? cleaned + '역' : '';
     }
 
     function getStationDistanceMeters(a, b) {
@@ -337,6 +393,30 @@
       const dx = (((a && a.lon) || 0) - ((b && b.lon) || 0)) * lonScale;
       const dy = (((a && a.lat) || 0) - ((b && b.lat) || 0)) * latScale;
       return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // 노선 색상 점 canvas 생성 (각 노선 색상 원)
+    function makeLineDotsCanvas(lines) {
+      const dotR = 5;
+      const gap = 3;
+      const n = lines.length;
+      const w = n * (dotR * 2) + Math.max(0, n - 1) * gap;
+      const h = dotR * 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(w, 1);
+      canvas.height = Math.max(h, 1);
+      const ctx = canvas.getContext('2d');
+      lines.forEach((l, i) => {
+        const cx = i * (dotR * 2 + gap) + dotR;
+        ctx.beginPath();
+        ctx.arc(cx, dotR, dotR - 0.75, 0, Math.PI * 2);
+        ctx.fillStyle = l.color || '#ffffff';
+        ctx.fill();
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      });
+      return canvas;
     }
 
     function addEntities(dataset) {
@@ -355,33 +435,81 @@
         });
       });
 
+      // ── 역 병합: 이름 + 근접도 기준 ──────────────────────────────
       const mergedStations = [];
       (dataset.stations || []).forEach((station) => {
         if (!Number.isFinite(station.lon) || !Number.isFinite(station.lat)) return;
         const labelKey = getStationLabelKey(station.name);
         if (!labelKey) return;
 
-        const existingStation = mergedStations.find((item) => item.key === labelKey && getStationDistanceMeters(item, station) <= 140);
-        if (existingStation) {
-          existingStation.lon = (existingStation.lon + station.lon) / 2;
-          existingStation.lat = (existingStation.lat + station.lat) / 2;
-          if (!existingStation.line && station.line) existingStation.line = station.line;
-          return;
-        }
+        // 같은 이름 & 800m 이내 OR 300m 이내(이름 무관) → 기존 역에 병합
+        const existing = mergedStations.find((item) => {
+          const dist = getStationDistanceMeters(item, station);
+          return (item.key === labelKey && dist <= 800) || dist <= 150;
+        });
 
-        mergedStations.push({
-          key: labelKey,
-          name: station.name || '',
-          lon: station.lon,
-          lat: station.lat,
-          line: station.line || '',
-          color: station.color || '#ffffff',
+        if (existing) {
+          // 좌표 평균
+          existing.lon = (existing.lon + station.lon) / 2;
+          existing.lat = (existing.lat + station.lat) / 2;
+          // displayName 갱신: 항상 정규화된 이름 사용
+          existing.displayName = normalizeStationDisplayName(existing.name);
+          // 노선 추가: 이름 & 색상 모두 유효하고 중복 없는 경우만
+          if (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF') {
+            const dup = existing.lines.some(
+              l => l.line === station.line || l.color.toLowerCase() === station.color.toLowerCase()
+            );
+            if (!dup) existing.lines.push({ line: station.line, color: station.color });
+          }
+        } else {
+          const firstLines = (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF')
+            ? [{ line: station.line, color: station.color }]
+            : [];
+          mergedStations.push({
+            key: labelKey,
+            name: station.name || '',
+            displayName: normalizeStationDisplayName(station.name),
+            lon: station.lon,
+            lat: station.lat,
+            lines: firstLines,
+          });
+        }
+      });
+
+      // ── lines 배열 최종 정리: 색상 기준 중복 제거(대소문자 무시) ──
+      mergedStations.forEach((s) => {
+        const seenColors = new Set();
+        s.lines = s.lines.filter((l) => {
+          const key = (l.color || '').toLowerCase();
+          if (seenColors.has(key)) return false;
+          seenColors.add(key);
+          return true;
         });
       });
 
+      // ── mergedStations 자체 중복 제거 (동일 이름·근접 역이 혹시 2개라면 합산) ──
+      for (let i = mergedStations.length - 1; i >= 0; i--) {
+        for (let j = 0; j < i; j++) {
+          const a = mergedStations[j], b = mergedStations[i];
+          const dist = getStationDistanceMeters(a, b);
+          if ((a.key === b.key && dist <= 800) || dist <= 80) {
+            // b → a에 병합
+            b.lines.forEach((l) => {
+              const dup = a.lines.some((al) => al.color.toLowerCase() === l.color.toLowerCase());
+              if (!dup) a.lines.push(l);
+            });
+            mergedStations.splice(i, 1);
+            break;
+          }
+        }
+      }
+
       if (window.WorldSearch && typeof window.WorldSearch.registerSubwayStations === 'function') {
-        window.WorldSearch.registerSubwayStations(mergedStations.map((station) => ({
-          ...station,
+        window.WorldSearch.registerSubwayStations(mergedStations.map((s) => ({
+          ...s,
+          name: s.displayName || normalizeStationDisplayName(s.name) || s.name,
+          line: (s.lines[0] || {}).line || '',
+          color: (s.lines[0] || {}).color || '#4B8BFF',
           zoom: 12,
           countryKo: '대한민국',
           countryEn: 'Korea',
@@ -389,24 +517,41 @@
         })));
       }
 
+      // ── 렌더링 ────────────────────────────────────────────────────
       mergedStations.forEach((station) => {
+        // 노선이 없으면 기본 색상 1개
+        const lines = station.lines.length > 0
+          ? station.lines
+          : [{ line: '', color: '#4B8BFF' }];
+
+        const dotsCanvas = makeLineDotsCanvas(lines);
+
+        // 역명 라벨 (지도 위치 기준 위쪽)
         dataSource.entities.add({
           position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
-          point: {
-            pixelSize: 6,
-            color: Cesium.Color.fromCssColorString(station.color || '#ffffff'),
-            outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
-            outlineWidth: 1.5,
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
           label: {
-            text: station.name || '',
+            text: station.displayName || normalizeStationDisplayName(station.name) || '',
             font: '12px sans-serif',
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             fillColor: Cesium.Color.WHITE,
             outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
             outlineWidth: 3,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+            pixelOffset: new Cesium.Cartesian2(0, -22),
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            scaleByDistance: new Cesium.NearFarScalar(5000, 1.0, 150000, 0.45),
+            translucencyByDistance: new Cesium.NearFarScalar(7000, 1.0, 220000, 0.0),
+          },
+          properties: { kind: 'subway-station', name: station.name || '', line: lines.map(l => l.line).join(',') },
+        });
+
+        // 노선 색상 점 (역명 바로 아래 ~ 지도 위치 위쪽)
+        dataSource.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
+          billboard: {
+            image: dotsCanvas,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
             pixelOffset: new Cesium.Cartesian2(0, -10),
@@ -415,98 +560,253 @@
             scaleByDistance: new Cesium.NearFarScalar(5000, 1.0, 150000, 0.45),
             translucencyByDistance: new Cesium.NearFarScalar(7000, 1.0, 220000, 0.0),
           },
-          properties: { kind: 'subway-station', name: station.name || '', line: station.line || '' },
         });
       });
       viewer.scene.requestRender();
     }
 
+    function isUrbanRailRelation(tags = {}) {
+      const route = String(tags.route || '').toLowerCase();
+      if (route === 'subway' || route === 'light_rail' || route === 'monorail') return true;
+      if (route !== 'train') return false;
+      const text = [tags.name, tags.ref, tags.network, tags.operator].filter(Boolean).join(' ');
+      // 명확한 장거리 국가철도 키워드만 제외 (lookahead 없이)
+      if (/\bKTX\b|\bITX\b|무궁화호|새마을호|누리로|경부고속선|호남고속선|경전선|장항선|충북선|태백선|영동선|정선선/i.test(text)) return false;
+      // 도시철도·수도권 전철 포함
+      return /(호선|공항철도|신분당|수인|분당|경의중앙|경춘|서해|신림|우이|김포|의정부|에버라인|인천[12]호선|부산[1-4]호선|대구[123]호선|대전[1]호선|광주[1]호선|GTX|도시철도|수도권 전철)/i.test(text);
+    }
+
+    function roleLooksLikeStation(role = '') {
+      return /(stop|station|platform|halt|stop_entry_only|stop_exit_only)/i.test(String(role || ''));
+    }
+
+    function nodeLooksLikeStation(tags = {}) {
+      const railway = String(tags.railway || '').toLowerCase();
+      const publicTransport = String(tags.public_transport || '').toLowerCase();
+      const station = String(tags.station || '').toLowerCase();
+      const text = [tags.name, tags.network, tags.operator, tags.line, tags.ref].filter(Boolean).join(' ');
+      return !!(tags.name && (
+        station === 'subway' || station === 'light_rail' || station === 'monorail' ||
+        railway === 'station' || railway === 'halt' || railway === 'platform' ||
+        publicTransport === 'station' || publicTransport === 'platform' || publicTransport === 'stop_position' ||
+        /(공항철도|신분당|수인|분당|경의|중앙|경춘|서해|신림|우이|김포|의정부|에버|인천|부산|대구|대전|광주|동해|GTX|도시철도|수도권 전철|지하철)/i.test(text)
+      ));
+    }
+
+    function relationText(tags = {}) {
+      return [tags.name, tags.ref, tags.network, tags.operator].filter(Boolean).join(' ');
+    }
+
+    function centerFromGeometry(geometry) {
+      if (!Array.isArray(geometry) || !geometry.length) return null;
+      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+      geometry.forEach((pos) => {
+        if (!Number.isFinite(pos.lat) || !Number.isFinite(pos.lon)) return;
+        minLat = Math.min(minLat, pos.lat); maxLat = Math.max(maxLat, pos.lat);
+        minLon = Math.min(minLon, pos.lon); maxLon = Math.max(maxLon, pos.lon);
+      });
+      if (!Number.isFinite(minLat) || !Number.isFinite(minLon)) return null;
+      return { lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2 };
+    }
+
+    function addStationFromMember(stations, stationSeen, stationSeenByLoc, source, lineName, color) {
+      if (!source) return;
+      const tags = source.tags || {};
+      const name = tags['name:ko'] || tags.name || tags.official_name || '';
+      const point = Number.isFinite(source.lon) && Number.isFinite(source.lat)
+        ? { lon: source.lon, lat: source.lat }
+        : centerFromGeometry(source.geometry);
+      if (!name || !point) return;
+      const resolvedLine = lineName || tags.line || tags.ref || '';
+      // 노선별 중복 방지
+      const dedupeKey = name + ':' + resolvedLine + ':' + point.lon.toFixed(5) + ':' + point.lat.toFixed(5);
+      if (stationSeen.has(dedupeKey)) return;
+      stationSeen.add(dedupeKey);
+      // 이름 기준 중복 방지 (좌표 오차로 인한 미스매치 방지)
+      const locKey = name.replace(/역$/, '').trim();
+      stationSeenByLoc.add(locKey);
+      stations.push({ name, lon: point.lon, lat: point.lat, line: resolvedLine, color: color || resolveColor(tags) });
+    }
+
     function transformOverpass(raw) {
       const elements = Array.isArray(raw && raw.elements) ? raw.elements : [];
-      const relationMap = new Map();
+      const nodeMap = new Map();
       const wayMap = new Map();
-      const stations = [];
-      const seenStations = new Set();
-
+      const relationMap = new Map();
       elements.forEach((el) => {
-        if (el.type === 'relation' && el.tags) relationMap.set(el.id, el);
-        if (el.type === 'way' && Array.isArray(el.geometry)) wayMap.set(el.id, el);
+        if (el.type === 'node') nodeMap.set(el.id, el);
+        if (el.type === 'way') wayMap.set(el.id, el);
+        if (el.type === 'relation') relationMap.set(el.id, el);
       });
 
-      elements.forEach((el) => {
-        if (el.type !== 'node') return;
-        const tags = el.tags || {};
-        const isStation = (tags.station && /(subway|light_rail|monorail)/i.test(tags.station)) ||
-          (tags.railway === 'station' && /(subway|light_rail|monorail)/i.test(tags.station || '')) ||
-          (tags.public_transport === 'station' && /(subway|light_rail|monorail)/i.test(tags.station || '')) ||
-          tags.subway === 'yes';
-        if (!isStation || !Number.isFinite(el.lon) || !Number.isFinite(el.lat)) return;
-        const name = tags.name || tags['name:ko'] || tags['official_name'] || '';
-        const dedupeKey = name + ':' + el.lon.toFixed(5) + ':' + el.lat.toFixed(5);
-        if (!name || seenStations.has(dedupeKey)) return;
-        seenStations.add(dedupeKey);
-        stations.push({
-          name,
-          lon: el.lon,
-          lat: el.lat,
-          line: tags.line || tags.ref || '',
-          color: resolveColor(tags),
-        });
+      const selectedRelations = [];
+      relationMap.forEach((relation) => {
+        const tags = relation.tags || {};
+        if (isUrbanRailRelation(tags)) selectedRelations.push(relation);
       });
 
       const lines = [];
-      relationMap.forEach((relation) => {
+      const stations = [];
+      const stationSeen = new Set();       // name:line:lon:lat — 노선별 중복 방지
+      const stationSeenByLoc = new Set();  // name:lon:lat — 위치 기준 중복 방지
+      const selectedMemberNodeIds = new Set();
+
+      selectedRelations.forEach((relation) => {
         const tags = relation.tags || {};
         const members = Array.isArray(relation.members) ? relation.members : [];
         const color = resolveColor(tags);
-        const name = resolveLineName(tags);
+        const name = resolveLineName(tags) || relationText(tags) || '지하철';
+
+        // 1패스: 역 먼저 수집
+        const relationStations = [];
+        members.forEach((member) => {
+          if (member.type === 'node') {
+            selectedMemberNodeIds.add(member.ref);
+            const node = nodeMap.get(member.ref);
+            if (node && (roleLooksLikeStation(member.role) || nodeLooksLikeStation(node.tags || {}))) {
+              addStationFromMember(stations, stationSeen, stationSeenByLoc, node, name, color);
+              if (Number.isFinite(node.lon) && Number.isFinite(node.lat)) {
+                relationStations.push({ lon: node.lon, lat: node.lat });
+              }
+            }
+          } else if (member.type === 'way') {
+            const way = wayMap.get(member.ref);
+            if (roleLooksLikeStation(member.role) && way) {
+              addStationFromMember(stations, stationSeen, stationSeenByLoc, way, name, color);
+              const c = centerFromGeometry(way.geometry);
+              if (c) relationStations.push(c);
+            }
+          }
+        });
+
+        // 2패스: way 세그먼트 — 역 범위 내에 있는 것만 추가
         members.forEach((member) => {
           if (member.type !== 'way') return;
           const way = wayMap.get(member.ref);
           if (!way || !Array.isArray(way.geometry) || way.geometry.length < 2) return;
-          lines.push({
-            name,
-            color,
-            positions: way.geometry.map((pos) => [pos.lon, pos.lat]),
-          });
+          if (roleLooksLikeStation(member.role)) return; // 역 플랫폼 way는 선로로 안 그림
+
+          // 역이 없거나 역 관련 role이 아닌 way는 모두 선로로 포함
+          // (차량기지 필터는 제거 - 끊김 현상 방지)
+          lines.push({ name, color, positions: way.geometry.map((pos) => [pos.lon, pos.lat]) });
+        });
+      });
+
+      // 관계에 포함된 노드 중 추가 누락분 보완 (이미 위치 기준으로 등록된 역은 스킵)
+      elements.forEach((el) => {
+        if (el.type !== 'node' || !Number.isFinite(el.lon) || !Number.isFinite(el.lat)) return;
+        const tags = el.tags || {};
+        const isStation = selectedMemberNodeIds.has(el.id) || nodeLooksLikeStation(tags);
+        if (!isStation) return;
+        const name = tags['name:ko'] || tags.name || tags.official_name || '';
+        if (!name) return;
+        const locKey = name.replace(/역$/, '').trim();
+        if (stationSeenByLoc.has(locKey)) return; // 이미 관계에서 등록된 역 → 스킵
+        stationSeenByLoc.add(locKey);
+        stations.push({
+          name,
+          lon: el.lon,
+          lat: el.lat,
+          line: tags.line || tags.ref || tags.route || '',
+          color: resolveColor(tags),
+        });
+      });
+
+      // 폴백 정적 데이터 (위치 기준으로 이미 있는 역은 스킵)
+      const fallbackStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
+      fallbackStations.forEach((station) => {
+        if (!Number.isFinite(Number(station.lon)) || !Number.isFinite(Number(station.lat)) || !station.name) return;
+        const locKey = String(station.name).replace(/역$/, '').trim();
+        if (stationSeenByLoc.has(locKey)) return;
+        stationSeenByLoc.add(locKey);
+        stations.push({
+          name: station.name || station.nameKo || '',
+          lon: Number(station.lon),
+          lat: Number(station.lat),
+          line: station.line || '',
+          color: station.color || resolveColor({ ref: station.line || '', name: station.line || '' }),
         });
       });
 
       return { lines, stations };
     }
 
-    async function load() {
-      const cached = parseCached();
-      if (cached) {
-        addEntities(cached);
-        return;
+    async function fetchOverpass(query) {
+      const endpoints = [
+        DATA_URL,
+        'https://overpass.kumi.systems/api/interpreter'
+      ];
+      let lastError = null;
+      for (const endpoint of endpoints) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000); // 20초 타임아웃
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: 'data=' + encodeURIComponent(query),
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if (!response.ok) throw new Error('HTTP ' + response.status + ' @ ' + endpoint);
+          return await response.json();
+        } catch (error) {
+          clearTimeout(timer);
+          lastError = error;
+          console.warn('overpass endpoint failed:', endpoint, error);
+        }
       }
+      throw lastError || new Error('No overpass endpoint available');
+    }
+
+    function getFallbackDataset() {
+      const fallbackStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
+      return {
+        lines: [],
+        stations: fallbackStations.map((station) => ({
+          name: station.name || station.nameKo || '',
+          lat: Number(station.lat),
+          lon: Number(station.lon),
+          line: station.line || '',
+          color: station.color || '#ffffff',
+        })),
+      };
+    }
+
+    async function load() {
+      // ① 정적 데이터 즉시 표시 — 항상 실행, 오류 격리
+      try {
+        const fallback = getFallbackDataset();
+        if (fallback.stations.length) addEntities(fallback);
+      } catch (e) { console.warn('subway static fallback failed:', e); }
+
+      // ② 유효 캐시가 있으면 교체
+      let cached = null;
+      try {
+        cached = parseCached();
+        if (cached) {
+          addEntities(cached.data);
+          if (!cached.expired) return;
+        }
+      } catch (e) { console.warn('subway cache load failed:', e); }
+
+      // ③ 백그라운드 Overpass 갱신
       const query = `
-[out:json][timeout:60];
+[out:json][timeout:90];
 area["ISO3166-1"="KR"][admin_level=2]->.searchArea;
 (
-  relation(area.searchArea)["route"~"subway|light_rail|monorail"];
-  node(area.searchArea)["station"~"subway|light_rail|monorail"];
-  node(area.searchArea)["railway"="station"]["station"~"subway|light_rail|monorail"];
-  node(area.searchArea)["public_transport"="station"]["station"~"subway|light_rail|monorail"];
-  node(area.searchArea)["subway"="yes"];
+  relation(area.searchArea)["type"="route"]["route"~"subway|light_rail|monorail|train"];
 );
 out body;
 >;
 out geom qt;`;
       try {
-        const response = await fetch(DATA_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-          body: 'data=' + encodeURIComponent(query),
-        });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const raw = await response.json();
+        const raw = await fetchOverpass(query);
         const transformed = transformOverpass(raw);
         addEntities(transformed);
         storeCache(transformed);
       } catch (error) {
-        console.warn('Korea subway overlay load failed:', error);
+        console.warn('Korea subway Overpass failed, keeping current display:', error);
       }
     }
 
@@ -581,6 +881,8 @@ out geom qt;`;
     const ziVal = document.getElementById('zi-val');
     const miBox = document.getElementById('mouse-info');
     const miPlace = document.getElementById('mi-place');
+    const miKind = document.getElementById('mi-kind');
+    const miDetail = document.getElementById('mi-detail');
     const MAX_Z = 19;
 
     function altToZoom(height) {
@@ -612,39 +914,92 @@ out geom qt;`;
       miBox.style.top = Math.max(10, pointer.y - Math.min(20, miBox.offsetHeight / 2)) + 'px';
     }
 
+    function setMouseInfo(primary, kind, detail, pointer) {
+      // 대상만 표시 (유형·상세 숨김)
+      let label = primary || '-';
+      if (kind === '지하철역' && detail && detail.startsWith('노선: ') && detail !== '노선: ') {
+        label = primary + ' (' + detail.replace('노선: ', '') + ')';
+      } else if (kind === '지하철 노선') {
+        label = primary + ' 노선';
+      } else if (kind === '일반 지도' && detail && !detail.includes(',')) {
+        // 역지오코딩 결과: 상세 주소 병기
+        label = primary + (detail ? ' · ' + detail : '');
+      }
+      if (miPlace) miPlace.textContent = label;
+      if (pointer) positionMouseInfo(pointer);
+    }
+
+    function extractPickedInfo(screenPosition) {
+      if (!screenPosition) return null;
+      let picked = null;
+      try {
+        picked = scene.pick(screenPosition);
+      } catch (error) {
+        picked = null;
+      }
+      const entity = picked && (picked.id || (picked.primitive && picked.primitive.id));
+      if (!entity || !entity.properties) return null;
+      const kind = Cesium.defined(entity.properties.kind) && typeof entity.properties.kind.getValue === 'function'
+        ? entity.properties.kind.getValue(Cesium.JulianDate.now())
+        : entity.properties.kind;
+      const name = Cesium.defined(entity.properties.name) && typeof entity.properties.name.getValue === 'function'
+        ? entity.properties.name.getValue(Cesium.JulianDate.now())
+        : entity.properties.name;
+      const line = Cesium.defined(entity.properties.line) && typeof entity.properties.line.getValue === 'function'
+        ? entity.properties.line.getValue(Cesium.JulianDate.now())
+        : entity.properties.line;
+
+      if (kind === 'subway-station') {
+        return {
+          primary: name || '지하철역',
+          kind: '지하철역',
+          detail: line ? ('노선: ' + line) : '노선 정보 없음',
+          exact: true,
+        };
+      }
+      if (kind === 'subway-line') {
+        return {
+          primary: name || '지하철 노선',
+          kind: '지하철 노선',
+          detail: '노선 경로',
+          exact: true,
+        };
+      }
+      return null;
+    }
+
     function scheduleReverseLookup(lat, lon, pointer) {
-      const key = lat.toFixed(2) + ',' + lon.toFixed(2);
+      const key = lat.toFixed(3) + ',' + lon.toFixed(3);
       if (latestLocationKey === key) {
         positionMouseInfo(pointer);
         return;
       }
       latestLocationKey = key;
-      miPlace.textContent = '위치 확인 중...';
-      positionMouseInfo(pointer);
+      setMouseInfo('위치 확인 중...', '일반 지도', '', pointer);
       clearTimeout(reverseDebounce);
       const token = ++reverseLookupToken;
       reverseDebounce = setTimeout(async () => {
         try {
           const result = await window.WorldSearch.reverseGeocode(lat, lon);
           if (token !== reverseLookupToken || latestLocationKey !== key) return;
-          miPlace.textContent = result.label || '위치 확인 중...';
-          positionMouseInfo(pointer);
+          const primary = result.label || (lat.toFixed(4) + ', ' + lon.toFixed(4));
+          const detail = [result.city, result.country].filter(Boolean).join(' · ') || '';
+          setMouseInfo(primary, '일반 지도', detail, pointer);
         } catch (error) {
           if (token !== reverseLookupToken || latestLocationKey !== key) return;
-          miPlace.textContent = '위치 확인 실패';
-          positionMouseInfo(pointer);
+          setMouseInfo(lat.toFixed(4) + ', ' + lon.toFixed(4), '일반 지도', '', pointer);
         }
-      }, 180);
+      }, 120);
     }
 
-    function updateFromCartesian(cartesian, pointer) {
+    function updateFromCartesian(cartesian, pointer, screenPosition) {
       const cameraPosition = viewer.camera.positionCartographic;
       if (!cameraPosition) return;
       const zoom = altToZoom(cameraPosition.height);
       ziVal.textContent = 'Z' + zoom;
       ziFill.style.height = Math.round((zoom / MAX_Z) * 100) + '%';
       ibAlt.textContent = formatAltitude(cameraPosition.height);
-      ibZoom.textContent = 'Z' + zoom;
+      if (ibZoom) ibZoom.textContent = 'Z' + zoom;
       if (!cartesian || !pointer) return;
 
       const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
@@ -653,6 +1008,16 @@ out geom qt;`;
       const lon = Cesium.Math.toDegrees(cartographic.longitude);
       ibLat.textContent = (lat >= 0 ? 'N ' : 'S ') + Math.abs(lat).toFixed(4) + '°';
       ibLon.textContent = (lon >= 0 ? 'E ' : 'W ') + Math.abs(lon).toFixed(4) + '°';
+
+      const pickedInfo = extractPickedInfo(screenPosition || pointer);
+      if (pickedInfo && pickedInfo.exact) {
+        latestLocationKey = 'entity:' + [pickedInfo.kind, pickedInfo.primary, pickedInfo.detail].join('|');
+        reverseLookupToken += 1;
+        clearTimeout(reverseDebounce);
+        setMouseInfo(pickedInfo.primary, pickedInfo.kind, pickedInfo.detail, pointer);
+        return;
+      }
+
       positionMouseInfo(pointer);
       scheduleReverseLookup(lat, lon, pointer);
     }
@@ -660,14 +1025,14 @@ out geom qt;`;
     handler.setInputAction(movement => {
       sharedState.lastPointerPosition = { x: movement.endPosition.x, y: movement.endPosition.y };
       sharedState.lastPointerCartesian = pickCartesian(movement.endPosition);
-      updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition);
+      updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition, movement.endPosition);
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
     handler.setInputAction(movement => {
       const position = movement.position || movement.endPosition;
       sharedState.lastPointerPosition = { x: position.x, y: position.y };
       sharedState.lastPointerCartesian = pickCartesian(position);
-      updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition);
+      updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition, position);
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
     scene.canvas.addEventListener('mouseleave', () => {
@@ -686,9 +1051,9 @@ out geom qt;`;
       ziVal.textContent = 'Z' + zoom;
       ziFill.style.height = Math.round((zoom / MAX_Z) * 100) + '%';
       ibAlt.textContent = formatAltitude(cameraPosition.height);
-      ibZoom.textContent = 'Z' + zoom;
+      if (ibZoom) ibZoom.textContent = 'Z' + zoom;
       if (sharedState.lastPointerCartesian && sharedState.lastPointerPosition) {
-        updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition);
+        updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition, sharedState.lastPointerPosition);
       }
     });
   }
@@ -832,10 +1197,11 @@ out geom qt;`;
     function flyToResult(item) {
       const fly = window.WorldSearch.getFlyToOptions(item);
       const safeLat = Cesium.Math.clamp(item.lat, -MAX_VIEW_LATITUDE, MAX_VIEW_LATITUDE);
-      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.7, 12: 0.18, 13: 0.08 };
-      const defaultZoom = item.type === 'station' ? 12 : (item.type === 'country' ? 6 : 10);
-      const zoomKey = Math.max(5, Math.min(13, Number(item.zoom || fly.zoom || defaultZoom)));
-      const latSpan = spanByZoom[zoomKey] || (item.type === 'country' ? 12 : (item.type === 'station' ? 0.18 : 1.2));
+      const spanByZoom = { 5: 18, 6: 12, 7: 8, 8: 4.8, 9: 2.4, 10: 1.2, 11: 0.45, 12: 0.18, 13: 0.08, 14: 0.04 };
+      // 국가는 zoom 6, 나머지는 모두 역과 동일한 zoom 14
+      const defaultZoom = item.type === 'country' ? 6 : 14;
+      const zoomKey = Math.max(5, Math.min(14, Number(item.zoom && item.type === 'country' ? item.zoom : defaultZoom)));
+      const latSpan = spanByZoom[zoomKey] ?? 0.04;
       const lonSpan = latSpan / Math.max(0.35, Math.cos(Cesium.Math.toRadians(safeLat)));
       const rectangle = Cesium.Rectangle.fromDegrees(
         item.lon - lonSpan / 2,
@@ -1027,6 +1393,15 @@ out geom qt;`;
 
 
   function positionPanelNearButton(panel, button, options = {}) {
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    if (isMobile) {
+      // 모바일: 하단 고정 시트 (CSS가 처리)
+      panel.style.top = '';
+      panel.style.left = '';
+      panel.style.right = '';
+      panel.style.bottom = '';
+      return;
+    }
     const gap = options.gap || 12;
     const offsetY = options.offsetY || 0;
     const buttonRect = button.getBoundingClientRect();

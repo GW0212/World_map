@@ -198,7 +198,7 @@
     ibLat.textContent = (lat >= 0 ? 'N ' : 'S ') + Math.abs(lat).toFixed(4) + '°';
     ibLon.textContent = (lon >= 0 ? 'E ' : 'W ') + Math.abs(lon).toFixed(4) + '°';
     ibAlt.textContent = fmtAlt(cam.height);
-    ibZoom.textContent = 'Z' + z;
+    if (ibZoom) ibZoom.textContent = 'Z' + z;
     ziVal.textContent = 'Z' + z;
     ziFill.style.height = Math.round((z / MAX_Z) * 100) + '%';
   });

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>World Map</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link href="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
@@ -13,6 +13,8 @@
     #cesiumContainer { width: 100vw; height: 100vh; }
     .cesium-credit-container, .cesium-widget-credits, .cesium-credit-expand-link { display: none !important; }
     button, input, select { font: inherit; }
+    button, a, .r-item { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .r-item:active { background: #dbeafe; }
 
     #loading {
       position: fixed; inset: 0; z-index: 9999;
@@ -83,6 +85,7 @@
     #srch-meta { min-width: 54px; padding-right: 12px; color: #64748b; font-size: 11px; font-weight: 700; }
     #srch-results {
       display: none; width: 100%; max-width: 472px; max-height: 360px; overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       background: rgba(255,255,255,.98); color: #0f172a; border-radius: 0 0 18px 18px;
       box-shadow: 0 14px 34px rgba(0,0,0,.35);
     }
@@ -201,32 +204,84 @@
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
     @media (max-width: 768px) {
-      #search-wrap { left: 10px; right: 10px; top: 10px; width: calc(100vw - 20px); }
+      /* 검색창 */
+      #search-wrap {
+        left: 10px; right: 10px; top: 10px;
+        top: calc(10px + env(safe-area-inset-top));
+        width: calc(100vw - 20px);
+      }
       #search-row { width: 100%; max-width: none; }
       #srch-panel { flex: 1 1 auto; }
       #srch-panel.is-open { max-width: none; }
-      #srch-input { width: 100%; min-width: 0; }
-      #srch-results { width: 100%; max-width: none; }
-      #title { top: 72px; font-size: 10px; letter-spacing: 6px; }
-      #info-bar { bottom: 10px; width: calc(100vw - 20px); }
+      #srch-input { width: 100%; min-width: 0; font-size: 16px; /* iOS 자동 줌 방지 */ }
+      #srch-results {
+        width: 100%; max-width: none;
+        max-height: min(360px, 50dvh);
+      }
+
+      /* 타이틀 */
+      #title { top: 72px; top: calc(72px + env(safe-area-inset-top)); font-size: 10px; letter-spacing: 6px; }
+
+      /* 하단 정보바 - safe area 대응 */
+      #info-bar {
+        bottom: 10px;
+        bottom: calc(10px + env(safe-area-inset-bottom));
+        width: calc(100vw - 20px);
+      }
       .ib { min-width: 0; flex: 1 1 0; padding: 9px 6px; }
       .ib-l { font-size: 9px; }
       .ib-v { font-size: clamp(9px, 3.4vw, 11px); }
+
+      /* 줌 인디케이터 */
       #zoom-ind { right: 10px; }
-      #globe-home-btn { right: 10px; bottom: 12px; width: 50px; height: 50px; }
+
+      /* 전세계 위치 버튼 - safe area 대응 */
+      #globe-home-btn {
+        right: 10px;
+        right: calc(10px + env(safe-area-inset-right));
+        bottom: 12px;
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        width: 50px; height: 50px;
+      }
       #globe-home-btn img { width: 26px; height: 26px; }
-      .tool-stack { right: 10px; bottom: 72px; gap: 8px; }
+
+      /* 툴 스택 - safe area 대응 */
+      .tool-stack {
+        right: 10px;
+        right: calc(10px + env(safe-area-inset-right));
+        bottom: 72px;
+        bottom: calc(72px + env(safe-area-inset-bottom));
+        gap: 8px;
+      }
       .tool-circle { width: 44px; height: 44px; }
-      .tool-panel { right: 10px; left: 10px; width: auto; max-width: none; }
-      #favorites-panel { width: 300px; }
-      #style-panel { width: 220px; }
-      #minimap { right: 10px; top: 126px; width: 102px; padding: 8px; }
-      #minimap-label { font-size: 10px; margin-bottom: 6px; }
-      #minimap-canvas { width: 78px; height: 78px; }
+
+      /* 툴 패널 - 하단에서 올라오는 시트 */
+      .tool-panel {
+        right: 0; left: 0; bottom: 0; top: auto;
+        width: 100%; max-width: none;
+        border-radius: 20px 20px 0 0;
+        padding-bottom: calc(14px + env(safe-area-inset-bottom));
+      }
+
+      /* 즐겨찾기/스타일 패널 크기 */
+      #favorites-panel, #style-panel { width: 100%; }
+
+      /* 미니맵 - 모바일에서 숨김 (작은 화면에서 불필요) */
+      #minimap { display: none; }
+
+      /* 마우스 정보 숨김 */
       #mouse-info { display: none !important; }
 
+      /* 토스트 */
+      #toast {
+        top: 70px;
+        top: calc(70px + env(safe-area-inset-top));
+        width: calc(100vw - 32px); text-align: center; border-radius: 12px;
+      }
 
-      #toast { top: 70px; width: calc(100vw - 32px); text-align: center; border-radius: 12px; }
+      /* 검색 결과 아이템 터치 영역 */
+      .r-item { min-height: 52px; padding: 10px 14px; }
+      .r-name { font-size: 15px; }
     }
   </style>
 </head>
@@ -239,11 +294,10 @@
   </div>
 
   <div id="cesiumContainer"></div>
-  </div>
   <div id="toast">링크가 복사되었습니다.</div>
 
   <div id="mouse-info">
-    <div class="mi-row"><span class="mi-k">위치</span><span class="mi-v" id="mi-place">위치 확인 중...</span></div>
+    <div class="mi-row"><span class="mi-v" id="mi-place" style="font-size:12px;max-width:240px;white-space:normal;line-height:1.4">위치 확인 중...</span></div>
   </div>
 
   <div id="search-wrap">
@@ -271,7 +325,6 @@
     <div class="ib"><span class="ib-l">위도</span><span class="ib-v" id="ib-lat">—</span></div>
     <div class="ib"><span class="ib-l">경도</span><span class="ib-v" id="ib-lon">—</span></div>
     <div class="ib"><span class="ib-l">고도</span><span class="ib-v" id="ib-alt">—</span></div>
-    <div class="ib"><span class="ib-l">줌</span><span class="ib-v" id="ib-zoom">—</span></div>
       </div>
 
   <div id="zoom-ind">
