@@ -128,7 +128,7 @@
     .ib-v { font-size: clamp(9px, 1vw, 11px); color: #0f172a; font-weight: 800; white-space: nowrap; line-height: 1.1; }
 
     #zoom-ind {
-      position: fixed; right: 30px; bottom: 326px; z-index: 20;
+      position: fixed; right: 15px; bottom: 326px; z-index: 20;
       display: flex; flex-direction: column; align-items: center; gap: 6px;
       background: rgba(15,23,42,.72); border-radius: 20px; padding: 10px 6px;
       backdrop-filter: blur(8px); box-shadow: 0 4px 16px rgba(0,0,0,.3);
@@ -219,7 +219,12 @@
         top: calc(10px + env(safe-area-inset-top));
         width: calc(100vw - 20px);
       }
-      #search-row { width: 100%; max-width: none; }
+      #search-row {
+        width: 52px;
+        max-width: none;
+        transition: width .25s ease;
+      }
+      #search-row.is-open { width: 100%; }
       #srch-panel { flex: 1 1 auto; }
       #srch-panel.is-open { max-width: none; }
       #srch-input { width: 100%; min-width: 0; font-size: 16px; /* iOS 자동 줌 방지 */ }
@@ -244,8 +249,8 @@
 
       /* 줌 인디케이터 - 우측 버튼들 위에 정렬 */
       #zoom-ind {
-        right: 20px;
-        right: calc(20px + env(safe-area-inset-right));
+        right: 10px;
+        right: calc(10px + env(safe-area-inset-right));
         top: auto;
         bottom: calc(280px + env(safe-area-inset-bottom));
         transform: none;
