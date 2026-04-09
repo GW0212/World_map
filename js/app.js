@@ -309,8 +309,8 @@
 
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEY = 'worldmap:korea-subway-overlay:v24';
-    const CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
+    const CACHE_KEYS = ['worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
+    const CACHE_TTL = 1000 * 60 * 60 * 24 * 14;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
     dataSource.show = false;
     viewer.dataSources.add(dataSource);
@@ -348,11 +348,16 @@
 
     function parseCached() {
       try {
-        const raw = localStorage.getItem(CACHE_KEY);
-        if (!raw) return null;
-        const cached = JSON.parse(raw);
-        if (!cached || !cached.timestamp || !cached.data) return null;
-        return { data: cached.data, expired: Date.now() - cached.timestamp > CACHE_TTL };
+        let best = null;
+        CACHE_KEYS.forEach((cacheKey) => {
+          const raw = localStorage.getItem(cacheKey);
+          if (!raw) return;
+          const cached = JSON.parse(raw);
+          if (!cached || !cached.timestamp || !cached.data) return;
+          if (!best || cached.timestamp > best.timestamp) best = cached;
+        });
+        if (!best) return null;
+        return { data: best.data, expired: Date.now() - best.timestamp > CACHE_TTL, timestamp: best.timestamp };
       } catch (error) {
         console.warn('subway cache parse failed', error);
         return null;
@@ -361,7 +366,10 @@
 
     function storeCache(data) {
       try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data }));
+        const payload = JSON.stringify({ timestamp: Date.now(), data });
+        CACHE_KEYS.forEach((cacheKey) => {
+          localStorage.setItem(cacheKey, payload);
+        });
       } catch (error) {
         console.warn('subway cache store failed', error);
       }
@@ -740,19 +748,21 @@
 
     async function fetchOverpass(query) {
       const endpoints = [
+        'https://overpass.kumi.systems/api/interpreter',
         DATA_URL,
-        'https://overpass.kumi.systems/api/interpreter'
+        'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
       ];
       let lastError = null;
       for (const endpoint of endpoints) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 20000); // 20초 타임아웃
+        const timer = setTimeout(() => controller.abort(), 12000);
         try {
           const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
             body: 'data=' + encodeURIComponent(query),
             signal: controller.signal,
+            cache: 'no-store',
           });
           clearTimeout(timer);
           if (!response.ok) throw new Error('HTTP ' + response.status + ' @ ' + endpoint);
@@ -768,41 +778,57 @@
 
     function getFallbackDataset() {
       const fallbackStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
+      const cached = parseCached();
+      const cachedLines = Array.isArray(cached?.data?.lines) ? cached.data.lines : [];
+      const cachedStations = Array.isArray(cached?.data?.stations) ? cached.data.stations : [];
       return {
-        lines: [],
-        stations: fallbackStations.map((station) => ({
-          name: station.name || station.nameKo || '',
-          lat: Number(station.lat),
-          lon: Number(station.lon),
-          line: station.line || '',
-          color: station.color || '#ffffff',
-        })),
+        lines: cachedLines,
+        stations: [
+          ...cachedStations,
+          ...fallbackStations.map((station) => ({
+            name: station.name || station.nameKo || '',
+            lat: Number(station.lat),
+            lon: Number(station.lon),
+            line: station.line || '',
+            color: station.color || '#ffffff',
+            aliases: Array.isArray(station.aliases) ? station.aliases.slice() : [],
+          }))
+        ],
       };
     }
 
+    let hasLoadedOnce = false;
+
     async function load() {
-      // ① 정적 데이터 즉시 표시 — 항상 실행, 오류 격리
+      // ① 정적/기존 캐시 데이터 즉시 표시 — 항상 실행, 오류 격리
       try {
         const fallback = getFallbackDataset();
-        if (fallback.stations.length) addEntities(fallback);
+        if ((fallback.stations || []).length || (fallback.lines || []).length) {
+          addEntities(fallback);
+          if ((fallback.stations || []).length >= 100) storeCache(fallback);
+        }
       } catch (e) { console.warn('subway static fallback failed:', e); }
 
-      // ② 유효 캐시가 있으면 교체
+      // ② 유효 캐시가 있으면 즉시 교체
       let cached = null;
       try {
         cached = parseCached();
-        if (cached) {
+        if (cached && (((cached.data || {}).stations || []).length || ((cached.data || {}).lines || []).length)) {
           addEntities(cached.data);
-          if (!cached.expired) return;
+          if (!cached.expired) {
+            hasLoadedOnce = true;
+            return;
+          }
         }
       } catch (e) { console.warn('subway cache load failed:', e); }
 
       // ③ 백그라운드 Overpass 갱신
       const query = `
-[out:json][timeout:90];
+[out:json][timeout:45];
 area["ISO3166-1"="KR"][admin_level=2]->.searchArea;
 (
-  relation(area.searchArea)["type"="route"]["route"~"subway|light_rail|monorail|train"];
+  relation(area.searchArea)["type"="route"]["route"~"subway|light_rail|monorail"];
+  relation(area.searchArea)["type"="route"]["route"="train"]["name"~"GTX|공항철도|신분당|수인|분당|경의|중앙|경춘|서해|신림|우이|김포|의정부|에버라인|인천|부산|대구|대전|광주|동해|도시철도|수도권 전철", i];
 );
 out body;
 >;
@@ -810,8 +836,11 @@ out geom qt;`;
       try {
         const raw = await fetchOverpass(query);
         const transformed = transformOverpass(raw);
-        addEntities(transformed);
-        storeCache(transformed);
+        if (((transformed.lines || []).length || (transformed.stations || []).length)) {
+          addEntities(transformed);
+          storeCache(transformed);
+          hasLoadedOnce = true;
+        }
       } catch (error) {
         console.warn('Korea subway Overpass failed, keeping current display:', error);
       }
@@ -822,6 +851,7 @@ out geom qt;`;
     return {
       setVisible(visible) {
         dataSource.show = !!visible;
+        if (visible && !hasLoadedOnce) load();
         viewer.scene.requestRender();
       },
       reload() { return load(); },

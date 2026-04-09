@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>World Map</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link href="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
@@ -219,12 +222,7 @@
         top: calc(10px + env(safe-area-inset-top));
         width: calc(100vw - 20px);
       }
-      #search-row {
-        width: 52px;
-        max-width: none;
-        transition: width .25s ease;
-      }
-      #search-row.is-open { width: 100%; }
+      #search-row { width: 100%; max-width: none; }
       #srch-panel { flex: 1 1 auto; }
       #srch-panel.is-open { max-width: none; }
       #srch-input { width: 100%; min-width: 0; font-size: 16px; /* iOS 자동 줌 방지 */ }
@@ -240,7 +238,7 @@
       #info-bar {
         bottom: 10px;
         bottom: calc(10px + env(safe-area-inset-bottom));
-        max-width: calc(100vw - 130px);
+        max-width: calc(100vw - 104px);
         width: auto;
       }
       .ib { min-width: 0; flex: 1 1 0; padding: 6px 8px; }
@@ -252,9 +250,12 @@
         right: 10px;
         right: calc(10px + env(safe-area-inset-right));
         top: auto;
-        bottom: calc(280px + env(safe-area-inset-bottom));
+        bottom: calc(274px + env(safe-area-inset-bottom));
+        width: 44px;
+        padding: 10px 0;
         transform: none;
       }
+      .zi-track { height: 116px; }
 
       /* 전세계 위치 버튼 - safe area 대응 */
       #globe-home-btn {
@@ -285,10 +286,19 @@
         padding-bottom: calc(14px + env(safe-area-inset-bottom));
         max-height: 60dvh; overflow-y: auto;
       }
-      #style-panel { max-height: 240px; }
+      #style-panel {
+        left: auto;
+        right: calc(62px + env(safe-area-inset-right));
+        bottom: calc(124px + env(safe-area-inset-bottom));
+        width: 176px;
+        max-width: calc(100vw - 86px);
+        max-height: 220px;
+        border-radius: 16px;
+        padding: 12px;
+      }
 
       /* 즐겨찾기/스타일 패널 크기 */
-      #favorites-panel, #style-panel { width: 100%; }
+      #favorites-panel { width: 100%; }
 
       /* 미니맵 - 모바일에서 숨김 (작은 화면에서 불필요) */
       #minimap { display: none; }
@@ -400,11 +410,11 @@
   <button id="globe-home-btn" type="button" aria-label="홈 화면으로 이동" title="지구 보기"><img src="earth-loading.png" alt="지구"></button>
 
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Cesium.js"></script>
-  <script src="data/countries.js"></script>
-  <script src="data/regions.js"></script>
-  <script src="data/cities.js"></script>
-  <script src="data/subway_stations_kr.js"></script>
-  <script src="js/search-engine.js"></script>
-  <script src="js/app.js"></script>
+  <script src="data/countries.js?v=20260409b"></script>
+  <script src="data/regions.js?v=20260409b"></script>
+  <script src="data/cities.js?v=20260409b"></script>
+  <script src="data/subway_stations_kr.js?v=20260409b"></script>
+  <script src="js/search-engine.js?v=20260409b"></script>
+  <script src="js/app.js?v=20260409b"></script>
 </body>
 </html>
