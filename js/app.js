@@ -41,7 +41,8 @@
       shareToastTimer: null,
     };
 
-    const initialView = readViewFromHash();
+    const isMobileInit = window.matchMedia('(max-width: 768px)').matches;
+    const initialView = isMobileInit ? null : readViewFromHash(); // 모바일: 항상 HOME_VIEW
     if (initialView) {
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromDegrees(initialView.lon, initialView.lat, initialView.alt),
@@ -308,7 +309,7 @@
 
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEY = 'worldmap:korea-subway-overlay:v23';
+    const CACHE_KEY = 'worldmap:korea-subway-overlay:v24';
     const CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
     dataSource.show = false;
@@ -396,26 +397,32 @@
 
     // 노선 색상 점 canvas 생성 (각 노선 색상 원)
     function makeLineDotsCanvas(lines) {
-      const dotR = 5;
-      const gap = 3;
-      const n = lines.length;
-      const w = n * (dotR * 2) + Math.max(0, n - 1) * gap;
-      const h = dotR * 2;
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(w, 1);
-      canvas.height = Math.max(h, 1);
-      const ctx = canvas.getContext('2d');
-      lines.forEach((l, i) => {
-        const cx = i * (dotR * 2 + gap) + dotR;
-        ctx.beginPath();
-        ctx.arc(cx, dotR, dotR - 0.75, 0, Math.PI * 2);
-        ctx.fillStyle = l.color || '#ffffff';
-        ctx.fill();
-        ctx.strokeStyle = '#0f172a';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      });
-      return canvas;
+      try {
+        const dotR = 5;
+        const gap = 3;
+        const n = lines.length;
+        const w = n * (dotR * 2) + Math.max(0, n - 1) * gap;
+        const h = dotR * 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(w, 1);
+        canvas.height = Math.max(h, 1);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        lines.forEach((l, i) => {
+          const cx = i * (dotR * 2 + gap) + dotR;
+          ctx.beginPath();
+          ctx.arc(cx, dotR, dotR - 0.75, 0, Math.PI * 2);
+          ctx.fillStyle = l.color || '#ffffff';
+          ctx.fill();
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        });
+        return canvas;
+      } catch (e) {
+        console.warn('makeLineDotsCanvas failed:', e);
+        return null;
+      }
     }
 
     function addEntities(dataset) {
@@ -547,6 +554,7 @@
         });
 
         // 노선 색상 점 (역명 바로 아래 ~ 지도 위치 위쪽)
+        if (!dotsCanvas) return; // canvas 생성 실패 시 건너뜀
         dataSource.entities.add({
           position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
           billboard: {
@@ -1795,6 +1803,13 @@ out geom qt;`;
     controller.inertiaTranslate = 0.35;
     controller.inertiaZoom = 0.35;
     viewer.scene.canvas.style.touchAction = 'none';
+
+    // 터치 선택 효과(파란 하이라이트) 방지
+    viewer.scene.canvas.style.webkitTapHighlightColor = 'transparent';
+    viewer.scene.canvas.style.userSelect = 'none';
+    viewer.scene.canvas.style.webkitUserSelect = 'none';
+    document.body.style.userSelect = 'none';
+    document.body.style.webkitUserSelect = 'none';
 
     let pinchActive = false;
     viewer.scene.canvas.addEventListener('touchstart', event => {
