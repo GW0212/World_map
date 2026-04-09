@@ -72,6 +72,10 @@
       transition: max-width .25s ease, opacity .2s ease;
     }
     #srch-panel.is-open { max-width: 430px; opacity: 1; }
+    @media (max-width: 768px) {
+      #srch-panel { max-width: 0 !important; opacity: 0 !important; overflow: hidden; flex: 1 1 auto; transition: none; }
+      #srch-panel.is-open { max-width: 100% !important; opacity: 1 !important; }
+    }
     #srch-input {
       width: 280px; border: 0; outline: none; background: transparent;
       color: #0f172a; font-size: 14px; font-weight: 600; padding: 15px 0 15px 14px;
@@ -108,26 +112,29 @@
     }
     #info-bar {
       position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20;
-      display: flex; overflow: hidden; border-radius: 14px;
-      background: rgba(255,255,255,.94); box-shadow: 0 14px 30px rgba(0,0,0,.28);
+      display: flex; overflow: hidden; border-radius: 12px;
+      background: rgba(255,255,255,.94); box-shadow: 0 8px 24px rgba(0,0,0,.22);
       backdrop-filter: blur(10px);
+      max-width: calc(100vw - 160px); /* 양쪽 버튼 영역 확보 */
     }
     .ib {
-      min-width: 84px; padding: 10px 14px; border-right: 1px solid #e5e7eb;
-      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      min-width: 72px; padding: 7px 10px; border-right: 1px solid #e5e7eb;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
     }
     .ib:last-child { border-right: 0; }
-    .ib-l { font-size: 10px; color: #94a3b8; font-weight: 700; letter-spacing: 1px; }
-    .ib-v { font-size: clamp(10px, 1.1vw, 12px); color: #0f172a; font-weight: 800; white-space: nowrap; line-height: 1.1; }
+    .ib-l { font-size: 9px; color: #94a3b8; font-weight: 700; letter-spacing: 1px; }
+    .ib-v { font-size: clamp(9px, 1vw, 11px); color: #0f172a; font-weight: 800; white-space: nowrap; line-height: 1.1; }
 
     #zoom-ind {
       position: fixed; right: 16px; top: 50%; transform: translateY(-50%); z-index: 20;
       display: flex; flex-direction: column; align-items: center; gap: 6px;
+      background: rgba(15,23,42,.72); border-radius: 20px; padding: 10px 6px;
+      backdrop-filter: blur(8px); box-shadow: 0 4px 16px rgba(0,0,0,.3);
     }
-    .zi-l { writing-mode: vertical-lr; transform: rotate(180deg); font-size: 8px; letter-spacing: 2px; color: rgba(255,255,255,.35); }
-    .zi-track { width: 4px; height: 120px; background: rgba(255,255,255,.16); border-radius: 999px; overflow: hidden; }
-    #zi-fill { width: 100%; height: 0; background: linear-gradient(to top, rgba(96,165,250,.95), rgba(191,219,254,.5)); transition: height .2s ease; }
-    #zi-val { font-size: 10px; font-weight: 800; color: rgba(255,255,255,.5); }
+    .zi-l { writing-mode: vertical-lr; transform: rotate(180deg); font-size: 8px; letter-spacing: 2px; color: rgba(148,163,184,.8); font-weight: 700; }
+    .zi-track { width: 6px; height: 120px; background: rgba(255,255,255,.12); border-radius: 999px; overflow: hidden; border: 1px solid rgba(255,255,255,.1); }
+    #zi-fill { width: 100%; height: 0; background: linear-gradient(to top, #3b82f6, #93c5fd); transition: height .2s ease; border-radius: 999px; }
+    #zi-val { font-size: 10px; font-weight: 800; color: #93c5fd; }
 
     #globe-home-btn {
       position: fixed; right: 18px; bottom: 18px; z-index: 25;
@@ -226,11 +233,12 @@
       #info-bar {
         bottom: 10px;
         bottom: calc(10px + env(safe-area-inset-bottom));
-        width: calc(100vw - 20px);
+        max-width: calc(100vw - 130px);
+        width: auto;
       }
-      .ib { min-width: 0; flex: 1 1 0; padding: 9px 6px; }
-      .ib-l { font-size: 9px; }
-      .ib-v { font-size: clamp(9px, 3.4vw, 11px); }
+      .ib { min-width: 0; flex: 1 1 0; padding: 6px 8px; }
+      .ib-l { font-size: 8px; }
+      .ib-v { font-size: clamp(8px, 2.8vw, 10px); }
 
       /* 줌 인디케이터 */
       #zoom-ind { right: 10px; }
@@ -257,11 +265,14 @@
 
       /* 툴 패널 - 하단에서 올라오는 시트 */
       .tool-panel {
+        position: fixed;
         right: 0; left: 0; bottom: 0; top: auto;
         width: 100%; max-width: none;
         border-radius: 20px 20px 0 0;
         padding-bottom: calc(14px + env(safe-area-inset-bottom));
+        max-height: 60dvh; overflow-y: auto;
       }
+      #style-panel { max-height: 240px; }
 
       /* 즐겨찾기/스타일 패널 크기 */
       #favorites-panel, #style-panel { width: 100%; }

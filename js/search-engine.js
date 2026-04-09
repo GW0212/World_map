@@ -1461,11 +1461,24 @@ out center tags;`;
 
   const reverseCache = new Map();
 
-  function makeReverseLabel(countryName, cityName) {
-    const country = String(countryName || '').trim();
-    const city = String(cityName || '').trim();
-    if (country && city) return country + ' - ' + city;
-    return country || city || '위치 확인 중...';
+  // 위치 레이블 생성: 중복 제거 후 ' · ' 구분자로 연결
+  function makeReverseLabel(countryName, cityName, extraParts) {
+    const seen = new Set();
+    const parts = [countryName, cityName, ...(extraParts || [])]
+      .map(s => String(s || '').trim())
+      .filter(s => {
+        if (!s || seen.has(s)) return false;
+        seen.add(s);
+        return true;
+      });
+    return parts.join(' · ') || '위치 확인 중...';
+  }
+
+  // 한국 행정구역 정리 (특별시/광역시/도 → 시/도 축약)
+  function cleanKrAdmin(name) {
+    return String(name || '')
+      .replace('특별시', '').replace('광역시', '').replace('특별자치시', '').replace('특별자치도', '')
+      .replace('자치시', '').replace('자치도', '').trim();
   }
 
 
@@ -1489,7 +1502,18 @@ out center tags;`;
     ].filter(Boolean));
     const cityRaw = cityCandidates[0] || '';
     const cityName = localizeCityName(cityRaw, countryCode, lat, lon, cityCandidates.slice(1));
-    return { country: countryName, city: cityName, countryCode, label: makeReverseLabel(countryName, cityName) };
+    const neighbourhood = addr.Neighborhood || addr.Address || '';
+    const district = addr.District || addr.Subregion || '';
+    let label;
+    if (countryCode === 'KR') {
+      const parts = [neighbourhood, district, cleanKrAdmin(cityName)].filter(Boolean);
+      const seen = new Set();
+      label = parts.filter(p => { if (seen.has(p)) return false; seen.add(p); return true; }).join(' · ');
+      if (!label) label = makeReverseLabel(countryName, cityName);
+    } else {
+      label = makeReverseLabel(countryName, cityName, [district, neighbourhood].filter(Boolean));
+    }
+    return { country: countryName, city: cityName, countryCode, neighbourhood, district, label };
   }
 
 
@@ -1503,26 +1527,27 @@ out center tags;`;
     const country = inferCountryFromText(addr.country_code || '') || inferCountryFromText(addr.country || '') || null;
     const countryCode = country ? country.code : '';
     const countryName = country ? (country.nameKo || country.nameEn) : (addr.country || '');
-    const displayFirst = data.display_name ? String(data.display_name).split(',')[0].trim() : '';
-    const cityCandidates = uniqueStrings([
-      names['name:ko'],
-      names['official_name:ko'],
-      names['short_name:ko'],
-      addr.city,
-      addr.town,
-      addr.village,
-      addr.municipality,
-      addr.city_district,
-      addr.suburb,
-      addr.state_district,
-      addr.county,
-      addr.state,
-      names.name,
-      displayFirst,
-    ].filter(Boolean));
-    const cityRaw = cityCandidates[0] || '';
-    const cityName = localizeCityName(cityRaw, countryCode, lat, lon, cityCandidates.slice(1));
-    return { country: countryName, city: cityName, countryCode, label: makeReverseLabel(countryName, cityName) };
+    // 계층별 행정구역 추출
+    const neighbourhood = names['name:ko'] || addr.suburb || addr.neighbourhood || addr.quarter || '';
+    const district = addr.city_district || addr.borough || addr.county || '';
+    const cityRaw = addr.city || addr.town || addr.village || addr.municipality || addr.state_district || '';
+    const stateRaw = addr.state || '';
+    const cityName = localizeCityName(cityRaw, countryCode, lat, lon, [district, neighbourhood].filter(Boolean));
+
+    // 한국: 동 · 구 · 시 형식
+    let label;
+    if (countryCode === 'KR') {
+      const dong = String(neighbourhood || '').trim();
+      const gu = String(district || '').trim();
+      const city = cleanKrAdmin(String(cityRaw || stateRaw || '').trim());
+      const parts = [dong, gu, city].filter(Boolean);
+      const seen = new Set();
+      label = parts.filter(p => { if (seen.has(p)) return false; seen.add(p); return true; }).join(' · ');
+      if (!label) label = makeReverseLabel(countryName, cityName);
+    } else {
+      label = makeReverseLabel(countryName, cityName, [district, neighbourhood].filter(Boolean));
+    }
+    return { country: countryName, city: cityName, countryCode, neighbourhood, district, label };
   }
 
   async function reverseGeocode(lat, lon) {

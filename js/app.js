@@ -215,8 +215,8 @@
       overlays.cartoLightLabels.alpha = isRoadmap ? 0.82 : 0;
       overlays.railOverlay.show = false;
       overlays.railOverlay.alpha = 0;
-      if (koreaSubwayOverlay && style === 'roadmap') koreaSubwayOverlay.setVisible(true);
-      // satellite 등 다른 스타일에선 지하철 숨김 (단, 타일 오류 fallback에선 유지)
+      // 일반 지도: 지하철 표시 / 위성 등 다른 스타일: 지하철 숨김
+      if (koreaSubwayOverlay) koreaSubwayOverlay.setVisible(style === 'roadmap');
       viewer.scene.requestRender();
     }
 
@@ -237,8 +237,7 @@
             layer.alpha = active ? 1 : 0;
           });
           applyBaseLayerTuning('satellite');
-          // 타일 오류로 satellite 전환 시에도 지하철역 표시 유지
-          // syncOverlayVisibility('satellite'); — 제거
+          if (koreaSubwayOverlay) koreaSubwayOverlay.setVisible(false);
           viewer.scene.requestRender();
         };
         ['roadmap', 'terrain'].forEach((name) => {
@@ -309,7 +308,7 @@
 
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEY = 'worldmap:korea-subway-overlay:v20';
+    const CACHE_KEY = 'worldmap:korea-subway-overlay:v23';
     const CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
     dataSource.show = false;
@@ -829,7 +828,9 @@ out geom qt;`;
     scene.globe.baseColor = Cesium.Color.BLACK;
     scene.globe.enableLighting = false;
     scene.globe.depthTestAgainstTerrain = false;
-    scene.globe.maximumScreenSpaceError = isMobile ? 1.15 : 0.95;
+    scene.globe.maximumScreenSpaceError = isMobile ? 1.5 : 1.2;
+    scene.globe.preloadAncestors = true;
+    scene.globe.loadingDescendantsLimit = isMobile ? 4 : 8;
     scene.skyAtmosphere.show = false;
     scene.sun.show = false;
     scene.moon.show = false;
@@ -915,16 +916,13 @@ out geom qt;`;
     }
 
     function setMouseInfo(primary, kind, detail, pointer) {
-      // 대상만 표시 (유형·상세 숨김)
       let label = primary || '-';
       if (kind === '지하철역' && detail && detail.startsWith('노선: ') && detail !== '노선: ') {
         label = primary + ' (' + detail.replace('노선: ', '') + ')';
       } else if (kind === '지하철 노선') {
         label = primary + ' 노선';
-      } else if (kind === '일반 지도' && detail && !detail.includes(',')) {
-        // 역지오코딩 결과: 상세 주소 병기
-        label = primary + (detail ? ' · ' + detail : '');
       }
+      // 일반 지도: label이 이미 정교하게 구성되어 있으므로 그대로 표시
       if (miPlace) miPlace.textContent = label;
       if (pointer) positionMouseInfo(pointer);
     }
@@ -983,8 +981,7 @@ out geom qt;`;
           const result = await window.WorldSearch.reverseGeocode(lat, lon);
           if (token !== reverseLookupToken || latestLocationKey !== key) return;
           const primary = result.label || (lat.toFixed(4) + ', ' + lon.toFixed(4));
-          const detail = [result.city, result.country].filter(Boolean).join(' · ') || '';
-          setMouseInfo(primary, '일반 지도', detail, pointer);
+          setMouseInfo(primary, '일반 지도', '', pointer);
         } catch (error) {
           if (token !== reverseLookupToken || latestLocationKey !== key) return;
           setMouseInfo(lat.toFixed(4) + ', ' + lon.toFixed(4), '일반 지도', '', pointer);
@@ -1472,7 +1469,10 @@ out geom qt;`;
     });
     buttons.forEach(item => item.addEventListener('click', () => {
       apply(item.dataset.style);
-      requestAnimationFrame(() => positionPanelNearButton(panel, btn, { offsetY: 16 }));
+      // 선택 후 패널 자동 닫힘
+      setTimeout(() => {
+        panel.classList.remove('open');
+      }, 150);
     }));
     apply(sharedState.currentStyle || DEFAULT_STYLE);
   }
