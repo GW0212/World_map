@@ -945,12 +945,12 @@ out geom qt;`;
     scene.globe.baseColor = Cesium.Color.BLACK;
     scene.globe.enableLighting = false;
     scene.globe.depthTestAgainstTerrain = false;
-    // 타일 로딩 속도 핵심: 낮을수록 고품질. 화질 개선을 위해 낮춤
-    scene.globe.maximumScreenSpaceError = isMobile ? 2.5 : 1.5;
-    scene.globe.preloadAncestors = true;
-    scene.globe.loadingDescendantsLimit = isMobile ? 8 : 16;
-    // 타일 캐시 크기 증가: 스타일 변경/확대·축소 시 재다운로드 방지
-    scene.globe.tileCacheSize = 600;
+    // 타일 해상도: 모바일은 SSE 높여 타일 요청 수 대폭 절감 (트래픽 핵심)
+    scene.globe.maximumScreenSpaceError = isMobile ? 3.5 : 1.5;
+    scene.globe.preloadAncestors = !isMobile; // 모바일: 선제 로딩 비활성화
+    scene.globe.loadingDescendantsLimit = isMobile ? 4 : 16;
+    // 캐시: 모바일 메모리 절약, PC는 재다운로드 방지
+    scene.globe.tileCacheSize = isMobile ? 150 : 600;
     scene.skyAtmosphere.show = false;
     scene.sun.show = false;
     scene.moon.show = false;
@@ -963,24 +963,26 @@ out geom qt;`;
     if (scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = false;
     scene.fxaa = false;
 
-    // HiDPI 지원: 데스크탑은 최대 1.75, 모바일은 최대 1.25 (화질/성능 균형)
+    // HiDPI 지원: 데스크탑 최대 1.75×, 모바일은 1.0 고정 (성능 우선)
     const dpr = window.devicePixelRatio || 1;
-    viewer.resolutionScale = isMobile ? Math.min(dpr, 1.25) : Math.min(dpr, 1.75);
-    viewer.targetFrameRate = isMobile ? 45 : 60;
+    viewer.resolutionScale = isMobile ? 1.0 : Math.min(dpr, 1.75);
+    viewer.targetFrameRate = isMobile ? 30 : 60;
 
     const controller = scene.screenSpaceCameraController;
     controller.maximumZoomDistance = HOME_VIEW.alt;
     controller.minimumZoomDistance = isMobile ? 120 : 500;
     controller.enableCollisionDetection = false;
     controller.maximumTiltAngle = Cesium.Math.toRadians(90);
-    controller.inertiaSpin = isMobile ? 0.18 : 0.62;
-    controller.inertiaTranslate = isMobile ? 0.34 : 0.7;
-    controller.inertiaZoom = isMobile ? 0.22 : 0.64;
+    // 모바일: inertia 낮춰 포스트-이동 렌더 횟수 절감
+    controller.inertiaSpin = isMobile ? 0.08 : 0.62;
+    controller.inertiaTranslate = isMobile ? 0.15 : 0.7;
+    controller.inertiaZoom = isMobile ? 0.10 : 0.64;
     controller.maximumMovementRatio = isMobile ? 0.12 : 0.16;
     controller.zoomFactor = isMobile ? 8.5 : 5.0;
     controller.zoomEventTypes = [Cesium.CameraEventType.WHEEL, Cesium.CameraEventType.PINCH];
 
-    viewer.camera.percentageChanged = 0.05; // 0.01 → 0.05: 카메라 변경 이벤트 빈도 감소
+    // 모바일: camera.changed 이벤트 빈도 대폭 감소 (syncTopDownCamera, minimap 호출 줄임)
+    viewer.camera.percentageChanged = isMobile ? 0.15 : 0.05;
   }
 
   function wireLoading(scene) {
@@ -1114,6 +1116,7 @@ out geom qt;`;
       setMouseInfo('위치 확인 중...', '일반 지도', '', pointer);
       clearTimeout(reverseDebounce);
       const token = ++reverseLookupToken;
+      const debounceMs = window.matchMedia('(max-width: 768px)').matches ? 250 : 120;
       reverseDebounce = setTimeout(async () => {
         try {
           const result = await window.WorldSearch.reverseGeocode(lat, lon);
@@ -1192,9 +1195,10 @@ out geom qt;`;
       const altText = formatAltitude(cameraPosition.height);
       if (ibAlt.textContent !== altText) ibAlt.textContent = altText;
       if (ibZoom && ibZoom.textContent !== zoomText) ibZoom.textContent = zoomText;
-      // 포인터 위치 업데이트: throttle 적용 (50ms = ~20fps)
+      // 포인터 위치 업데이트: throttle (모바일 100ms, 데스크탑 50ms)
       const now = performance.now();
-      if (now - _lastPostRenderMs < 50) return;
+      const throttleMs = window.matchMedia('(max-width: 768px)').matches ? 100 : 50;
+      if (now - _lastPostRenderMs < throttleMs) return;
       _lastPostRenderMs = now;
       if (sharedState.lastPointerCartesian && sharedState.lastPointerPosition) {
         updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition, sharedState.lastPointerPosition);
@@ -1584,15 +1588,43 @@ out geom qt;`;
         return;
       }
       btn.disabled = true;
+      // 안전 타이머: complete 콜백 미발동 시에도 반드시 버튼 복구
+      const safetyTimer = setTimeout(() => { btn.disabled = false; }, 12000);
+
       navigator.geolocation.getCurrentPosition(position => {
         const { latitude, longitude } = position.coords;
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
-          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-          duration: 1.6,
-          complete: () => { btn.disabled = false; },
-        });
+        // 모바일: flyTo 중 syncTopDownCamera(setView) 개입으로 complete 미발동 방지
+        // → 비행 시작 플래그 설정 후 setView로 즉시 이동
+        const isMobile = window.matchMedia('(max-width: 768px)').matches;
+        if (isMobile) {
+          // 모바일: 플래그로 syncTopDownCamera 차단 후 setView 사용
+          window._locationFlyActive = true;
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+            duration: 1.4,
+            complete: () => {
+              window._locationFlyActive = false;
+              clearTimeout(safetyTimer);
+              btn.disabled = false;
+            },
+            cancel: () => {
+              window._locationFlyActive = false;
+              clearTimeout(safetyTimer);
+              btn.disabled = false;
+            },
+          });
+        } else {
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+            duration: 1.6,
+            complete: () => { clearTimeout(safetyTimer); btn.disabled = false; },
+            cancel: () => { clearTimeout(safetyTimer); btn.disabled = false; },
+          });
+        }
       }, error => {
+        clearTimeout(safetyTimer);
         btn.disabled = false;
         alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
         console.warn(error);
@@ -1708,7 +1740,10 @@ out geom qt;`;
         draw();
       });
     };
-    viewer.camera.changed.addEventListener(throttledDraw);
+    // 모바일: minimap이 display:none이므로 camera.changed 리스너 불필요
+    if (!window.matchMedia('(max-width: 768px)').matches) {
+      viewer.camera.changed.addEventListener(throttledDraw);
+    }
     window.addEventListener('resize', draw);
     draw();
   }
@@ -1960,9 +1995,9 @@ out geom qt;`;
     const controller = viewer.scene.screenSpaceCameraController;
     const canvas = viewer.scene.canvas;
     controller.bounceAnimationTime = 0;
-    controller.inertiaSpin = 0.12;
-    controller.inertiaTranslate = 0.26;
-    controller.inertiaZoom = 0.18;
+    controller.inertiaSpin = 0.08;
+    controller.inertiaTranslate = 0.12;
+    controller.inertiaZoom = 0.10;
     controller.enableTilt = false;
     controller.enableLook = false;
     controller.enableRotate = true;
@@ -1975,6 +2010,8 @@ out geom qt;`;
     let lockCameraSync = false;
     let syncQueued = false;
     const syncTopDownCamera = () => {
+      // 내 위치 flyTo 진행 중에는 카메라 강제 보정하지 않음 (complete 미발동 버그 방지)
+      if (window._locationFlyActive) return;
       if (lockCameraSync) return;
       const position = viewer.camera.positionCartographic;
       if (!position) return;
