@@ -553,6 +553,19 @@
         }
 
         // ── 렌더링 ────────────────────────────────────────────────────
+        // matchMedia / NearFarScalar: 루프 밖에서 1회만 생성
+        const _isMob = window.matchMedia('(max-width: 768px)').matches;
+        const _labelScale = _isMob
+          ? new Cesium.NearFarScalar(3000, 0.72, 600000, 0.4)
+          : new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5);
+        const _labelTranslucency = new Cesium.NearFarScalar(10000, 1.0, 1800000, 0.0);
+        const _billboardScale = _isMob
+          ? new Cesium.NearFarScalar(3000, 0.75, 800000, 0.35)
+          : new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5);
+        const _billboardTranslucency = new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0);
+        const _labelOffset = new Cesium.Cartesian2(0, -26);
+        const _billboardOffset = new Cesium.Cartesian2(0, -10);
+
         mergedStations.forEach((station) => {
           const seenRenderColors = new Set();
           const dedupedLines = (station.lines.length > 0 ? station.lines : [{ line: '', color: '#4B8BFF' }])
@@ -565,7 +578,6 @@
 
           const dotsCanvas = makeLineDotsCanvasCached(dedupedLines);
 
-          const isMobLabel = window.matchMedia('(max-width: 768px)').matches;
           dataSource.entities.add({
             position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
             label: {
@@ -577,31 +589,26 @@
               outlineWidth: 4,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              pixelOffset: new Cesium.Cartesian2(0, -26),
+              pixelOffset: _labelOffset,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: isMobLabel
-                ? new Cesium.NearFarScalar(3000, 0.72, 600000, 0.4)
-                : new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5),
-              translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1800000, 0.0),
+              scaleByDistance: _labelScale,
+              translucencyByDistance: _labelTranslucency,
             },
             properties: { kind: 'subway-station', name: station.name || '', line: dedupedLines.map(l => l.line).join(',') },
           });
           if (!dotsCanvas) return;
-          const isMob = window.matchMedia('(max-width: 768px)').matches;
           dataSource.entities.add({
             position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
             billboard: {
               image: dotsCanvas,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              pixelOffset: new Cesium.Cartesian2(0, -10),
+              pixelOffset: _billboardOffset,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: isMob
-                ? new Cesium.NearFarScalar(3000, 0.75, 800000, 0.35)
-                : new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5),
-              translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0),
+              scaleByDistance: _billboardScale,
+              translucencyByDistance: _billboardTranslucency,
             },
           });
         });
@@ -925,12 +932,7 @@ out geom qt;`;
     return {
       setVisible(visible) {
         dataSource.show = !!visible;
-        if (visible) {
-          // 이미 엔티티가 있으면 재추가하지 않음 (위성↔일반 반복 전환 시 노선 사라짐 버그 방지)
-          const hasEntities = dataSource.entities.values.length > 0;
-          if (!hasEntities && !hasLoadedOnce) load();
-          else if (!hasLoadedOnce) load();
-        }
+        if (visible && !hasLoadedOnce) load();
         viewer.scene.requestRender();
       },
       reload() { return load(); },
@@ -1025,6 +1027,10 @@ out geom qt;`;
     const miKind = document.getElementById('mi-kind');
     const miDetail = document.getElementById('mi-detail');
     const MAX_Z = 19;
+    // 핫패스에서 matchMedia 반복 호출 방지: 1회 평가
+    const _isMobile = window.matchMedia('(max-width: 768px)').matches;
+    const _postRenderThrottleMs = _isMobile ? 100 : 50;
+    const _reverseDebounceMs = _isMobile ? 250 : 120;
 
     function altToZoom(height) {
       const z = Math.round(19 - Math.log2(Math.max(1, height) / 300));
@@ -1049,7 +1055,7 @@ out geom qt;`;
     }
 
     function positionMouseInfo(pointer) {
-      if (window.matchMedia('(max-width: 768px)').matches) return;
+      if (_isMobile) return;
       miBox.style.display = 'block';
       miBox.style.left = Math.max(10, pointer.x - miBox.offsetWidth - 18) + 'px';
       miBox.style.top = Math.max(10, pointer.y - Math.min(20, miBox.offsetHeight / 2)) + 'px';
@@ -1116,7 +1122,7 @@ out geom qt;`;
       setMouseInfo('위치 확인 중...', '일반 지도', '', pointer);
       clearTimeout(reverseDebounce);
       const token = ++reverseLookupToken;
-      const debounceMs = window.matchMedia('(max-width: 768px)').matches ? 250 : 120;
+      const debounceMs = _reverseDebounceMs;
       reverseDebounce = setTimeout(async () => {
         try {
           const result = await window.WorldSearch.reverseGeocode(lat, lon);
@@ -1197,8 +1203,7 @@ out geom qt;`;
       if (ibZoom && ibZoom.textContent !== zoomText) ibZoom.textContent = zoomText;
       // 포인터 위치 업데이트: throttle (모바일 100ms, 데스크탑 50ms)
       const now = performance.now();
-      const throttleMs = window.matchMedia('(max-width: 768px)').matches ? 100 : 50;
-      if (now - _lastPostRenderMs < throttleMs) return;
+      if (now - _lastPostRenderMs < _postRenderThrottleMs) return;
       _lastPostRenderMs = now;
       if (sharedState.lastPointerCartesian && sharedState.lastPointerPosition) {
         updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition, sharedState.lastPointerPosition);
