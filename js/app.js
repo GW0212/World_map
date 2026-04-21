@@ -582,7 +582,7 @@
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
               pixelOffset: new Cesium.Cartesian2(0, -26),
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              heightReference: Cesium.HeightReference.NONE,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
               scaleByDistance: _isMob
                 ? new Cesium.NearFarScalar(3000, 0.72, 600000, 0.4)
@@ -599,7 +599,7 @@
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
               pixelOffset: new Cesium.Cartesian2(0, -10),
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              heightReference: Cesium.HeightReference.NONE,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
               scaleByDistance: _isMob
                 ? new Cesium.NearFarScalar(3000, 0.75, 800000, 0.35)
@@ -809,6 +809,9 @@
             cache: 'no-store',
           });
           clearTimeout(timer);
+          if (response.status === 429 || response.status === 503) {
+            throw new Error('HTTP ' + response.status + ' (rate limited) @ ' + endpoint);
+          }
           if (!response.ok) throw new Error('HTTP ' + response.status + ' @ ' + endpoint);
           resolve(await response.json());
         } catch (error) {
@@ -858,42 +861,72 @@
     let hasLoadedOnce = false;
     let loadPromise = null;
 
+    // Overpass 속도제한 쿨다운 (새로고침 반복 시 429 방지)
+    const OVERPASS_COOLDOWN_KEY = 'worldmap:overpass-cooldown:v1';
+    const OVERPASS_COOLDOWN_MS = 5 * 60 * 1000; // 5분
+
+    function isOverpassOnCooldown() {
+      try {
+        const ts = Number(localStorage.getItem(OVERPASS_COOLDOWN_KEY) || '0');
+        return ts > 0 && (Date.now() - ts) < OVERPASS_COOLDOWN_MS;
+      } catch (e) { return false; }
+    }
+    function setOverpassCooldown() {
+      try { localStorage.setItem(OVERPASS_COOLDOWN_KEY, String(Date.now())); } catch (e) {}
+    }
+    function clearOverpassCooldown() {
+      try { localStorage.removeItem(OVERPASS_COOLDOWN_KEY); } catch (e) {}
+    }
+
+    // addEntities 후 여러 프레임 렌더 요청 (CLAMP_TO_GROUND 위치 확정 보장)
+    function requestMultiRender() {
+      viewer.scene.requestRender();
+      setTimeout(() => viewer.scene.requestRender(), 200);
+      setTimeout(() => viewer.scene.requestRender(), 600);
+      setTimeout(() => viewer.scene.requestRender(), 1200);
+    }
+
     async function load() {
       if (loadPromise) return loadPromise;
       loadPromise = (async () => {
-        // ① 캐시/폴백 데이터를 먼저 즉시 표시해 오버레이 공백 상태를 방지
-        let cached = null;
+        const staticStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
+
+        // ① localStorage 캐시 확인 → 유효하면 즉시 표시하고 종료
         try {
-          cached = parseCached();
+          const cached = parseCached();
           if (cached && ((cached.data || {}).lines || []).length > 0) {
             addEntities(cached.data);
             window.KR_SUBWAY_OVERLAY_DATA = cached.data;
+            requestMultiRender();
             if (!cached.expired) {
               hasLoadedOnce = true;
               return;
             }
-          } else {
-            const fallbackDataset = getFallbackDataset();
-            if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
-              addEntities(fallbackDataset);
-              window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
-            }
+            // 만료된 캐시: 일단 표시 후 Overpass로 갱신 계속 진행
           }
         } catch (e) {
-          console.warn('subway cache load failed:', e);
-          try {
-            const fallbackDataset = getFallbackDataset();
-            if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
-              addEntities(fallbackDataset);
-              window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
-            }
-          } catch (fallbackError) {
-            console.warn('subway fallback load failed:', fallbackError);
-          }
+          console.warn('subway cache read failed:', e);
         }
 
-        // ② Overpass 갱신 — 완전한 데이터가 도착할 때까지 기다렸다가 한 번에 표시
-        // bbox: 한국 전체 영역 (제주 포함) — area 조회보다 훨씬 빠름
+        // ② Overpass 갱신 — 쿨다운 중이면 스킵
+        if (isOverpassOnCooldown()) {
+          console.info('Overpass on cooldown, using cached/fallback data');
+          // 캐시가 없었다면 정적 폴백 표시 (최후 수단)
+          if (dataSource.entities.values.length === 0 && staticStations.length > 0) {
+            addEntities({
+              lines: [],
+              stations: staticStations.map((s) => ({
+                name: s.name || s.nameKo || '',
+                lat: Number(s.lat), lon: Number(s.lon),
+                line: s.line || '', color: s.color || '#4B8BFF',
+              })),
+            });
+            requestMultiRender();
+          }
+          hasLoadedOnce = true;
+          return;
+        }
+
         const query = `
 [out:json][timeout:50][bbox:33.0,124.5,38.7,130.0];
 (
@@ -906,14 +939,31 @@ out geom qt;`;
         try {
           const raw = await fetchOverpass(query);
           const transformed = transformOverpass(raw);
-          if (((transformed.lines || []).length || (transformed.stations || []).length)) {
+          if ((transformed.lines || []).length || (transformed.stations || []).length) {
             addEntities(transformed);
             storeCache(transformed);
+            requestMultiRender();
+            clearOverpassCooldown();
             hasLoadedOnce = true;
           }
         } catch (error) {
-          console.warn('Korea subway Overpass failed, will retry on next setVisible:', error);
-          // hasLoadedOnce = false 유지 → 다음 setVisible(true) 시 자동 재시도
+          console.warn('Korea subway Overpass failed:', error);
+          if (String(error).includes('429') || String(error).includes('503') || String(error).includes('HTTP 4') || String(error).includes('HTTP 5')) {
+            setOverpassCooldown();
+          }
+          // Overpass 실패 + 캐시도 없을 때만 정적 폴백 표시 (최후 수단)
+          if (dataSource.entities.values.length === 0 && staticStations.length > 0) {
+            addEntities({
+              lines: [],
+              stations: staticStations.map((s) => ({
+                name: s.name || s.nameKo || '',
+                lat: Number(s.lat), lon: Number(s.lon),
+                line: s.line || '', color: s.color || '#4B8BFF',
+              })),
+            });
+            requestMultiRender();
+          }
+          hasLoadedOnce = staticStations.length > 0;
         }
       })();
       try {
@@ -929,9 +979,15 @@ out geom qt;`;
       setVisible(visible) {
         dataSource.show = !!visible;
         if (visible && !hasLoadedOnce) load();
-        viewer.scene.requestRender();
+        // 여러 프레임 렌더 요청: CLAMP_TO_GROUND 위치 확정 보장
+        if (visible) requestMultiRender();
+        else viewer.scene.requestRender();
       },
-      reload() { return load(); },
+      reload() {
+        hasLoadedOnce = false;
+        clearOverpassCooldown();
+        return load();
+      },
     };
   }
 
