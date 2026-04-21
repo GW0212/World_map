@@ -553,18 +553,8 @@
         }
 
         // ── 렌더링 ────────────────────────────────────────────────────
-        // matchMedia / NearFarScalar: 루프 밖에서 1회만 생성
+        // matchMedia: 루프 밖에서 1회만 평가 (매 역마다 호출 방지)
         const _isMob = window.matchMedia('(max-width: 768px)').matches;
-        const _labelScale = _isMob
-          ? new Cesium.NearFarScalar(3000, 0.72, 600000, 0.4)
-          : new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5);
-        const _labelTranslucency = new Cesium.NearFarScalar(10000, 1.0, 1800000, 0.0);
-        const _billboardScale = _isMob
-          ? new Cesium.NearFarScalar(3000, 0.75, 800000, 0.35)
-          : new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5);
-        const _billboardTranslucency = new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0);
-        const _labelOffset = new Cesium.Cartesian2(0, -26);
-        const _billboardOffset = new Cesium.Cartesian2(0, -10);
 
         mergedStations.forEach((station) => {
           const seenRenderColors = new Set();
@@ -578,6 +568,8 @@
 
           const dotsCanvas = makeLineDotsCanvasCached(dedupedLines);
 
+          // Cesium entity 옵션: NearFarScalar / Cartesian2는 entity마다 새로 생성해야 함
+          // (동일 인스턴스 공유 시 Cesium 내부 Property 시스템이 오작동)
           dataSource.entities.add({
             position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
             label: {
@@ -589,11 +581,13 @@
               outlineWidth: 4,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              pixelOffset: _labelOffset,
+              pixelOffset: new Cesium.Cartesian2(0, -26),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: _labelScale,
-              translucencyByDistance: _labelTranslucency,
+              scaleByDistance: _isMob
+                ? new Cesium.NearFarScalar(3000, 0.72, 600000, 0.4)
+                : new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5),
+              translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1800000, 0.0),
             },
             properties: { kind: 'subway-station', name: station.name || '', line: dedupedLines.map(l => l.line).join(',') },
           });
@@ -604,11 +598,13 @@
               image: dotsCanvas,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              pixelOffset: _billboardOffset,
+              pixelOffset: new Cesium.Cartesian2(0, -10),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: _billboardScale,
-              translucencyByDistance: _billboardTranslucency,
+              scaleByDistance: _isMob
+                ? new Cesium.NearFarScalar(3000, 0.75, 800000, 0.35)
+                : new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5),
+              translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0),
             },
           });
         });
