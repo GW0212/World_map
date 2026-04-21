@@ -413,8 +413,9 @@
     function makeLineDotsCanvas(lines) {
       try {
         const dpr = Math.min(window.devicePixelRatio || 1, 3);
-        const dotR = 7; // 더 큰 점 (가독성 향상)
-        const gap = 4;
+        const isMobile = window.matchMedia('(max-width: 768px)').matches;
+        const dotR = isMobile ? 4 : 5; // 모바일에서 작게
+        const gap = 3;
         const n = lines.length;
         const logW = n * (dotR * 2) + Math.max(0, n - 1) * gap;
         const logH = dotR * 2;
@@ -427,11 +428,11 @@
         lines.forEach((l, i) => {
           const cx = i * (dotR * 2 + gap) + dotR;
           ctx.beginPath();
-          ctx.arc(cx, dotR, dotR - 1, 0, Math.PI * 2);
+          ctx.arc(cx, dotR, dotR - 0.8, 0, Math.PI * 2);
           ctx.fillStyle = l.color || '#ffffff';
           ctx.fill();
           ctx.strokeStyle = '#0a1020';
-          ctx.lineWidth = 1.8;
+          ctx.lineWidth = 1.5;
           ctx.stroke();
         });
         return canvas;
@@ -564,6 +565,7 @@
 
           const dotsCanvas = makeLineDotsCanvasCached(dedupedLines);
 
+          const isMobLabel = window.matchMedia('(max-width: 768px)').matches;
           dataSource.entities.add({
             position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
             label: {
@@ -578,12 +580,15 @@
               pixelOffset: new Cesium.Cartesian2(0, -26),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5),
+              scaleByDistance: isMobLabel
+                ? new Cesium.NearFarScalar(3000, 0.72, 600000, 0.4)
+                : new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5),
               translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1800000, 0.0),
             },
             properties: { kind: 'subway-station', name: station.name || '', line: dedupedLines.map(l => l.line).join(',') },
           });
           if (!dotsCanvas) return;
+          const isMob = window.matchMedia('(max-width: 768px)').matches;
           dataSource.entities.add({
             position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
             billboard: {
@@ -593,7 +598,9 @@
               pixelOffset: new Cesium.Cartesian2(0, -10),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5),
+              scaleByDistance: isMob
+                ? new Cesium.NearFarScalar(3000, 0.75, 800000, 0.35)
+                : new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5),
               translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0),
             },
           });
