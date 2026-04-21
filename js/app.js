@@ -146,8 +146,8 @@
     };
 
     overlays.arcgisLabels.alpha = 1.0;
-    overlays.cartoLightLabels.alpha = 0.65;
-    overlays.arcgisOverlay.alpha = 0.95;
+    overlays.cartoLightLabels.alpha = 0.75;
+    overlays.arcgisOverlay.alpha = 1.0;
     overlays.railOverlay.alpha = 0;
     overlays.railOverlay.show = false;
     return overlays;
@@ -201,9 +201,9 @@
       if (!overlays) return;
       const isSatellite = style === 'satellite';
       overlays.arcgisLabels.show = isSatellite;
-      overlays.arcgisLabels.alpha = isSatellite ? 0.92 : 0;
+      overlays.arcgisLabels.alpha = isSatellite ? 1.0 : 0;
       overlays.arcgisOverlay.show = isSatellite;
-      overlays.arcgisOverlay.alpha = isSatellite ? 0.95 : 0;
+      overlays.arcgisOverlay.alpha = isSatellite ? 1.0 : 0;
       const isRoadmap = style === 'roadmap';
       overlays.cartoLightLabels.show = isRoadmap;
       overlays.cartoLightLabels.alpha = isRoadmap ? 0.82 : 0;
@@ -409,27 +409,29 @@
       return Math.sqrt(dx * dx + dy * dy);
     }
 
-    // 노선 색상 점 canvas 생성 (각 노선 색상 원)
+    // 노선 색상 점 canvas 생성 (각 노선 색상 원) — HiDPI 지원
     function makeLineDotsCanvas(lines) {
       try {
-        const dotR = 5;
-        const gap = 3;
+        const dpr = Math.min(window.devicePixelRatio || 1, 3);
+        const dotR = 7; // 더 큰 점 (가독성 향상)
+        const gap = 4;
         const n = lines.length;
-        const w = n * (dotR * 2) + Math.max(0, n - 1) * gap;
-        const h = dotR * 2;
+        const logW = n * (dotR * 2) + Math.max(0, n - 1) * gap;
+        const logH = dotR * 2;
         const canvas = document.createElement('canvas');
-        canvas.width = Math.max(w, 1);
-        canvas.height = Math.max(h, 1);
+        canvas.width = Math.max(Math.ceil(logW * dpr), 1);
+        canvas.height = Math.max(Math.ceil(logH * dpr), 1);
         const ctx = canvas.getContext('2d');
         if (!ctx) return null;
+        ctx.scale(dpr, dpr);
         lines.forEach((l, i) => {
           const cx = i * (dotR * 2 + gap) + dotR;
           ctx.beginPath();
-          ctx.arc(cx, dotR, dotR - 0.75, 0, Math.PI * 2);
+          ctx.arc(cx, dotR, dotR - 1, 0, Math.PI * 2);
           ctx.fillStyle = l.color || '#ffffff';
           ctx.fill();
-          ctx.strokeStyle = '#0f172a';
-          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = '#0a1020';
+          ctx.lineWidth = 1.8;
           ctx.stroke();
         });
         return canvas;
@@ -464,8 +466,8 @@
           dataSource.entities.add({
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray(line.positions.flat()),
-              width: 4.2,
-              material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.92),
+              width: 5.0,
+              material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.95),
               clampToGround: true,
             },
             properties: { kind: 'subway-line', name: line.name || '지하철' },
@@ -566,18 +568,18 @@
             position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
             label: {
               text: station.displayName || normalizeStationDisplayName(station.name) || '',
-              font: '12px sans-serif',
+              font: 'bold 13px -apple-system, BlinkMacSystemFont, "Noto Sans KR", "Malgun Gothic", sans-serif',
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               fillColor: Cesium.Color.WHITE,
-              outlineColor: Cesium.Color.fromCssColorString('#0f172a'),
-              outlineWidth: 3,
+              outlineColor: Cesium.Color.fromCssColorString('#0a1020'),
+              outlineWidth: 4,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              pixelOffset: new Cesium.Cartesian2(0, -22),
+              pixelOffset: new Cesium.Cartesian2(0, -26),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: new Cesium.NearFarScalar(12000, 1.0, 4000000, 0.62),
-              translucencyByDistance: new Cesium.NearFarScalar(15000, 1.0, 6500000, 0.18),
+              scaleByDistance: new Cesium.NearFarScalar(6000, 1.1, 600000, 0.5),
+              translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1800000, 0.0),
             },
             properties: { kind: 'subway-station', name: station.name || '', line: dedupedLines.map(l => l.line).join(',') },
           });
@@ -591,8 +593,8 @@
               pixelOffset: new Cesium.Cartesian2(0, -10),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              scaleByDistance: new Cesium.NearFarScalar(12000, 1.0, 2500000, 0.62),
-              translucencyByDistance: new Cesium.NearFarScalar(15000, 1.0, 4000000, 0.15),
+              scaleByDistance: new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5),
+              translucencyByDistance: new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0),
             },
           });
         });
@@ -936,12 +938,12 @@ out geom qt;`;
     scene.globe.baseColor = Cesium.Color.BLACK;
     scene.globe.enableLighting = false;
     scene.globe.depthTestAgainstTerrain = false;
-    // 타일 로딩 속도 핵심: 낮을수록 고품질이지만 느림. 2.5~3.5가 속도/품질 최적 균형
-    scene.globe.maximumScreenSpaceError = isMobile ? 3.5 : 2.5;
+    // 타일 로딩 속도 핵심: 낮을수록 고품질. 화질 개선을 위해 낮춤
+    scene.globe.maximumScreenSpaceError = isMobile ? 2.5 : 1.5;
     scene.globe.preloadAncestors = true;
-    scene.globe.loadingDescendantsLimit = isMobile ? 6 : 12;
+    scene.globe.loadingDescendantsLimit = isMobile ? 8 : 16;
     // 타일 캐시 크기 증가: 스타일 변경/확대·축소 시 재다운로드 방지
-    scene.globe.tileCacheSize = 400;
+    scene.globe.tileCacheSize = 600;
     scene.skyAtmosphere.show = false;
     scene.sun.show = false;
     scene.moon.show = false;
@@ -954,8 +956,9 @@ out geom qt;`;
     if (scene.postProcessStages && scene.postProcessStages.fxaa) scene.postProcessStages.fxaa.enabled = false;
     scene.fxaa = false;
 
-    // resolutionScale 1.0 고정: HiDPI 과렌더링 방지 (1.4 → 1.0이면 픽셀 수 50% 감소)
-    viewer.resolutionScale = 1.0;
+    // HiDPI 지원: 데스크탑은 최대 1.75, 모바일은 최대 1.25 (화질/성능 균형)
+    const dpr = window.devicePixelRatio || 1;
+    viewer.resolutionScale = isMobile ? Math.min(dpr, 1.25) : Math.min(dpr, 1.75);
     viewer.targetFrameRate = isMobile ? 45 : 60;
 
     const controller = scene.screenSpaceCameraController;
@@ -1168,15 +1171,24 @@ out geom qt;`;
       miBox.style.display = 'none';
     });
 
+    let _lastPostRenderMs = 0;
     scene.postRender.addEventListener(() => {
       clampCameraDistance(viewer);
       const cameraPosition = viewer.camera.positionCartographic;
       if (!cameraPosition) return;
       const zoom = altToZoom(cameraPosition.height);
-      ziVal.textContent = 'Z' + zoom;
-      ziFill.style.height = Math.round((zoom / MAX_Z) * 100) + '%';
-      ibAlt.textContent = formatAltitude(cameraPosition.height);
-      if (ibZoom) ibZoom.textContent = 'Z' + zoom;
+      // 줌/고도 표시: 가볍고 중요하므로 항상 업데이트
+      const zoomText = 'Z' + zoom;
+      if (ziVal.textContent !== zoomText) ziVal.textContent = zoomText;
+      const fillPct = Math.round((zoom / MAX_Z) * 100) + '%';
+      if (ziFill.style.height !== fillPct) ziFill.style.height = fillPct;
+      const altText = formatAltitude(cameraPosition.height);
+      if (ibAlt.textContent !== altText) ibAlt.textContent = altText;
+      if (ibZoom && ibZoom.textContent !== zoomText) ibZoom.textContent = zoomText;
+      // 포인터 위치 업데이트: throttle 적용 (50ms = ~20fps)
+      const now = performance.now();
+      if (now - _lastPostRenderMs < 50) return;
+      _lastPostRenderMs = now;
       if (sharedState.lastPointerCartesian && sharedState.lastPointerPosition) {
         updateFromCartesian(sharedState.lastPointerCartesian, sharedState.lastPointerPosition, sharedState.lastPointerPosition);
       }
@@ -1681,7 +1693,15 @@ out geom qt;`;
     }
 
     bg.onload = draw;
-    viewer.camera.changed.addEventListener(draw);
+    let _minimapThrottle = null;
+    const throttledDraw = () => {
+      if (_minimapThrottle) return;
+      _minimapThrottle = requestAnimationFrame(() => {
+        _minimapThrottle = null;
+        draw();
+      });
+    };
+    viewer.camera.changed.addEventListener(throttledDraw);
     window.addEventListener('resize', draw);
     draw();
   }
