@@ -3,7 +3,12 @@
 
   const MAX_VIEW_LATITUDE = 84.8;
   const FAVORITES_KEY = 'worldmap:favorites:v1';
-  const DEFAULT_STYLE = 'satellite';
+  const DEFAULT_STYLE = 'latestSatellite';
+  const LATEST_SATELLITE_CACHE_KEY = 'worldmap:latest-satellite-date:v2';
+  const LATEST_SATELLITE_MAX_LOOKBACK_DAYS = 30;
+  const LATEST_SATELLITE_STABLE_OFFSET_DAYS = 2;
+  const LATEST_SATELLITE_CLOSE_ZOOM_HEIGHT = 2000000;
+  const LATEST_SATELLITE_RETURN_ZOOM_HEIGHT = 3400000;
   const HOME_VIEW = {
     lon: 127.5,
     lat: 36.0,
@@ -15,8 +20,23 @@
 
   window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/';
 
+  function isMobileDevice() {
+    return window.matchMedia('(max-width: 768px)').matches ||
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+  }
+
+  function configureRequestBudget() {
+    const mobile = isMobileDevice();
+    if (Cesium.RequestScheduler) {
+      Cesium.RequestScheduler.throttleRequests = true;
+      Cesium.RequestScheduler.maximumRequestsPerServer = mobile ? 5 : 8;
+      Cesium.RequestScheduler.maximumRequests = mobile ? 18 : 48;
+    }
+  }
+
   function boot() {
     Cesium.Ion.defaultAccessToken = undefined;
+    configureRequestBudget();
 
     const creditSink = document.createElement('div');
     creditSink.style.display = 'none';
@@ -41,7 +61,7 @@
       shareToastTimer: null,
     };
 
-    const isMobileInit = window.matchMedia('(max-width: 768px)').matches;
+    const isMobileInit = isMobileDevice();
     const initialView = isMobileInit ? null : readViewFromHash(); // 모바일: 항상 HOME_VIEW
     if (initialView) {
       viewer.camera.setView({
@@ -70,7 +90,7 @@
 
     wireLoading(scene);
     wireInfoBar(viewer, sharedState);
-    wireHomeButton(viewer, sharedState);
+    wireHomeButton(viewer, sharedState, styleManager);
     wireSearch(viewer, sharedState);
     wireShare(viewer, sharedState, styleManager);
     wireCurrentLocation(viewer, sharedState);
@@ -81,6 +101,171 @@
     wireMobileGestures(viewer);
 
     scene.requestRender();
+  }
+
+
+  function pad2(value) {
+    return String(value).padStart(2, '0');
+  }
+
+  function formatGibsDate(date) {
+    return date.getUTCFullYear() + '-' + pad2(date.getUTCMonth() + 1) + '-' + pad2(date.getUTCDate());
+  }
+
+  function getUtcDateOffset(daysAgo) {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo));
+  }
+
+  function getLatestSatelliteCandidateDates() {
+    const priorityOffsets = [2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 21, 30];
+    const dates = [];
+    const seen = new Set();
+    priorityOffsets.forEach((offset) => {
+      if (offset > LATEST_SATELLITE_MAX_LOOKBACK_DAYS) return;
+      const date = formatGibsDate(getUtcDateOffset(offset));
+      if (!seen.has(date)) {
+        seen.add(date);
+        dates.push(date);
+      }
+    });
+    return dates;
+  }
+
+  function buildLatestSatelliteTileUrl(date) {
+    return 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/' +
+      'VIIRS_SNPP_CorrectedReflectance_TrueColor/default/' + date +
+      '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg';
+  }
+
+  function createLatestSatelliteProvider(date) {
+    return new Cesium.UrlTemplateImageryProvider({
+      url: buildLatestSatelliteTileUrl(date),
+      minimumLevel: 0,
+      maximumLevel: 9,
+      tileDiscardPolicy: createDarkTileDiscardPolicy(),
+      credit: 'NASA GIBS / VIIRS SNPP Corrected Reflectance True Color (' + date + ')',
+    });
+  }
+
+  function createDarkTileDiscardPolicy() {
+    return {
+      isReady: function () { return true; },
+      shouldDiscardImage: function (image) {
+        try {
+          if (!image || !image.width || !image.height) return false;
+          const canvas = document.createElement('canvas');
+          const size = 18;
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (!ctx) return false;
+          ctx.drawImage(image, 0, 0, size, size);
+          const data = ctx.getImageData(0, 0, size, size).data;
+          let dark = 0;
+          let grayUnavailable = 0;
+          let colorful = 0;
+          let total = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            const a = data[i + 3];
+            if (a < 8) continue;
+            total += 1;
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const brightness = (r + g + b) / 3;
+            const spread = Math.max(r, g, b) - Math.min(r, g, b);
+            // NASA 일일 위성 타일에서 관측 누락 영역은 검정/짙은 남색으로 들어올 수 있다.
+            // 실제 해양색보다 훨씬 어두운 픽셀 비율이 높으면 해당 타일을 폐기해 하단 고해상도 타일이 보이게 한다.
+            if (brightness < 48 && r < 40 && g < 55 && b < 80) dark += 1;
+            // 고배율에서 NASA가 회색 "Map data not yet available" 타일을 내려줄 때가 있다.
+            // 회색 배경 비율이 지나치게 높고 컬러 픽셀이 거의 없으면 해당 타일을 버려 확대 화면 오류 문구를 막는다.
+            if (brightness > 145 && brightness < 235 && spread < 18) grayUnavailable += 1;
+            if (spread > 32) colorful += 1;
+          }
+          if (total <= 0) return false;
+          return dark / total > 0.62 || (grayUnavailable / total > 0.68 && colorful / total < 0.08);
+        } catch (error) {
+          return false;
+        }
+      },
+    };
+  }
+
+  function preloadImage(url, timeoutMs) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const img = new Image();
+      const timer = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      }, timeoutMs || 3500);
+      img.onload = function () {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(true);
+      };
+      img.onerror = function () {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(false);
+      };
+      img.referrerPolicy = 'no-referrer';
+      img.src = url;
+    });
+  }
+
+  function testLatestSatelliteDate(date) {
+    const samples = [
+      { z: '3', y: '3', x: '6' },
+      { z: '3', y: '3', x: '4' },
+      { z: '3', y: '4', x: '6' },
+    ];
+    return Promise.all(samples.map(sample => {
+      const sampleUrl = buildLatestSatelliteTileUrl(date)
+        .replace('{z}', sample.z)
+        .replace('{y}', sample.y)
+        .replace('{x}', sample.x) + '?_=' + Date.now();
+      return preloadImage(sampleUrl, 4500);
+    })).then(results => results.filter(Boolean).length >= 2);
+  }
+
+  function readCachedLatestSatelliteDate() {
+    try {
+      const raw = window.localStorage.getItem(LATEST_SATELLITE_CACHE_KEY);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached || !cached.imageryDate || !cached.checkedAt) return null;
+      const checkedAt = new Date(cached.checkedAt).getTime();
+      if (!Number.isFinite(checkedAt)) return null;
+      const cacheAge = Date.now() - checkedAt;
+      if (cacheAge > 6 * 60 * 60 * 1000) return null;
+      return cached.imageryDate;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveCachedLatestSatelliteDate(date) {
+    try {
+      window.localStorage.setItem(LATEST_SATELLITE_CACHE_KEY, JSON.stringify({
+        imageryDate: date,
+        checkedAt: new Date().toISOString(),
+      }));
+    } catch (error) {}
+  }
+
+  function updateSatelliteDateLabels(latestDate, isCloseZoomFallback) {
+    const latestDateEl = document.getElementById('latest-satellite-date-text');
+    if (latestDateEl) {
+      // 현재 UI에서는 별도 날짜 문구를 노출하지 않는다.
+      // 값은 유지해 두어 추후 필요 시 바로 표기할 수 있게 한다.
+      const prefix = isCloseZoomFallback ? '확대 시 고해상도 자동 전환 · ' : '일일 위성 기준일 · ';
+      latestDateEl.textContent = prefix + (latestDate || '확인 중');
+    }
   }
 
   function createViewer(creditSink) {
@@ -157,49 +342,146 @@
     let overlays = null;
     let koreaSubwayOverlay = null;
 
+    const mobile = isMobileDevice();
+    // 기본 화면은 NASA 일일 최신 위성(구름이 보이는 화면)을 사용한다.
+    // 가까이 확대했을 때만 고해상도 위성으로 전환하고, 전환 기준에 여유값을 둬서
+    // 카메라 이동 중 2번 화면 ↔ 1번 화면으로 계속 바뀌는 현상을 막는다.
+    const dailySatelliteEnabled = true;
+    let latestSatelliteHighResFallback = false;
+    let suppressHighResUnderlayUntil = 0;
+    let activeStyle = DEFAULT_STYLE;
+    let latestActiveDate = readCachedLatestSatelliteDate() || formatGibsDate(getUtcDateOffset(LATEST_SATELLITE_STABLE_OFFSET_DAYS));
+    const initialLatestSatelliteDate = latestActiveDate;
+    updateSatelliteDateLabels(latestActiveDate, false);
+
     const baseLayers = {
+      latestSatellite: dailySatelliteEnabled
+        ? viewer.imageryLayers.addImageryProvider(createLatestSatelliteProvider(initialLatestSatelliteDate), 0)
+        : null,
       satellite: initialBaseLayer,
       roadmap: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
         url: 'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
         maximumLevel: 20,
         credit: 'CARTO / OpenStreetMap contributors',
       }), 0),
-      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.ArcGisMapServerImageryProvider({
-        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer',
-        enablePickFeatures: false,
+      terrain: viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 19,
+        credit: 'Esri World Topographic Map',
       }), 0),
     };
 
-    Object.entries(baseLayers).forEach(([key, layer]) => {
-      layer.show = key === DEFAULT_STYLE;
-      layer.alpha = key === DEFAULT_STYLE ? 1 : 0;
+    function attachLatestSatelliteRecovery(layer) {
+      const provider = layer && layer.imageryProvider;
+      if (!provider || !provider.errorEvent || typeof provider.errorEvent.addEventListener !== 'function') return;
+      provider.errorEvent.addEventListener((error) => {
+        console.warn('latest satellite imagery provider error:', error);
+        if (activeStyle !== 'latestSatellite') return;
+        // 개별 타일 오류 때문에 최신 위성 전체를 꺼버리면 화면이 1번 고해상도 위성으로 고정된다.
+        // 레이어는 유지하고 누락 타일만 하단 고해상도 위성이 보정하게 둔다.
+        layer.show = !latestSatelliteHighResFallback;
+        layer.alpha = latestSatelliteHighResFallback ? 0 : 1.0;
+        if (baseLayers.satellite) {
+          baseLayers.satellite.show = true;
+          baseLayers.satellite.alpha = 1;
+        }
+        viewer.scene.requestRender();
+      });
+    }
+
+    attachLatestSatelliteRecovery(baseLayers.latestSatellite);
+
+    Object.values(baseLayers).forEach(layer => {
+      if (!layer) return;
+      layer.show = false;
+      layer.alpha = 0;
     });
+    baseLayers.satellite.show = true;
+    baseLayers.satellite.alpha = 1;
+
+    function tuneLayer(layer, values) {
+      if (!layer) return;
+      layer.brightness = values.brightness;
+      layer.contrast = values.contrast;
+      layer.gamma = values.gamma;
+      layer.saturation = values.saturation;
+    }
 
     function applyBaseLayerTuning(style) {
-      Object.values(baseLayers).forEach(layer => {
-        layer.brightness = 1.0;
-        layer.contrast = 1.0;
-        layer.gamma = 1.0;
-        layer.saturation = 1.0;
-      });
-      const active = baseLayers[style];
-      if (!active) return;
-      if (style === 'satellite') {
-        active.brightness = 1.03;
-        active.contrast = 1.1;
-        active.gamma = 0.96;
-        active.saturation = 1.04;
+      Object.values(baseLayers).forEach(layer => tuneLayer(layer, { brightness: 1.0, contrast: 1.0, gamma: 1.0, saturation: 1.0 }));
+      if (style === 'latestSatellite') {
+        tuneLayer(baseLayers.satellite, { brightness: 1.03, contrast: 1.08, gamma: 0.97, saturation: 1.04 });
+        tuneLayer(baseLayers.latestSatellite, { brightness: 1.04, contrast: 1.08, gamma: 0.96, saturation: 1.08 });
+      } else if (style === 'satellite') {
+        tuneLayer(baseLayers.satellite, { brightness: 1.03, contrast: 1.1, gamma: 0.96, saturation: 1.04 });
       } else if (style === 'terrain') {
-        active.brightness = 1.02;
-        active.contrast = 1.06;
-        active.gamma = 0.99;
-        active.saturation = 1.02;
+        tuneLayer(baseLayers.terrain, { brightness: 1.02, contrast: 1.06, gamma: 0.99, saturation: 1.02 });
       }
+    }
+
+    function raiseReferenceOverlays() {
+      if (!overlays) return;
+      ['arcgisLabels', 'arcgisOverlay', 'cartoLightLabels', 'railOverlay'].forEach((name) => {
+        const layer = overlays[name];
+        if (!layer) return;
+        try { viewer.imageryLayers.raiseToTop(layer); } catch (error) {}
+      });
+    }
+
+    function getCameraHeight() {
+      const cartographic = viewer.camera && viewer.camera.positionCartographic;
+      return cartographic && Number.isFinite(cartographic.height) ? cartographic.height : Infinity;
+    }
+
+    function shouldUseHighResSatelliteFallback() {
+      const height = getCameraHeight();
+      if (!baseLayers.latestSatellite) return true;
+      if (latestSatelliteHighResFallback) {
+        latestSatelliteHighResFallback = height < LATEST_SATELLITE_RETURN_ZOOM_HEIGHT;
+      } else {
+        latestSatelliteHighResFallback = height < LATEST_SATELLITE_CLOSE_ZOOM_HEIGHT;
+      }
+      return latestSatelliteHighResFallback;
+    }
+
+    function hideNonSatelliteBaseLayers() {
+      ['roadmap', 'terrain'].forEach(name => {
+        const layer = baseLayers[name];
+        if (!layer) return;
+        layer.show = false;
+        layer.alpha = 0;
+      });
+    }
+
+    function syncLatestSatelliteHybridLayer() {
+      if (activeStyle !== 'latestSatellite') return;
+      hideNonSatelliteBaseLayers();
+
+      const useHighResFallback = shouldUseHighResSatelliteFallback();
+      const suppressHighResUnderlay = !useHighResFallback && Date.now() < suppressHighResUnderlayUntil;
+
+      baseLayers.satellite.show = true;
+      // 첫 화면 복귀 직후에는 최신 위성 타일이 올라오기 전까지 고해상도 위성이 깜빡 보이는 현상을 막는다.
+      // 확대 구간에서는 최신 위성을 숨기고 고해상도만 사용해서 NASA "Map data not yet available" 타일 노출을 방지한다.
+      baseLayers.satellite.alpha = useHighResFallback ? 1 : (suppressHighResUnderlay ? 0 : 1);
+
+      if (baseLayers.latestSatellite) {
+        baseLayers.latestSatellite.show = !useHighResFallback;
+        // 최신 위성이 기본 화면이므로 가능한 한 불투명하게 유지한다.
+        // 검정/누락 타일은 tileDiscardPolicy가 버려서 아래 고해상도 타일이 보정한다.
+        baseLayers.latestSatellite.alpha = useHighResFallback ? 0 : 1.0;
+        if (!useHighResFallback) {
+          try { viewer.imageryLayers.raiseToTop(baseLayers.latestSatellite); } catch (error) {}
+        }
+      }
+      raiseReferenceOverlays();
+      updateSatelliteDateLabels(latestActiveDate, useHighResFallback);
+      viewer.scene.requestRender();
     }
 
     function syncOverlayVisibility(style) {
       if (!overlays) return;
-      const isSatellite = style === 'satellite';
+      const isSatellite = style === 'latestSatellite' || style === 'satellite';
       overlays.arcgisLabels.show = isSatellite;
       overlays.arcgisLabels.alpha = isSatellite ? 1.0 : 0;
       overlays.arcgisOverlay.show = isSatellite;
@@ -211,6 +493,8 @@
       overlays.railOverlay.alpha = 0;
       // 일반 지도: 지하철 표시 / 위성 등 다른 스타일: 지하철 숨김
       if (koreaSubwayOverlay) koreaSubwayOverlay.setVisible(style === 'roadmap');
+      if (style === 'latestSatellite') syncLatestSatelliteHybridLayer();
+      raiseReferenceOverlays();
       viewer.scene.requestRender();
     }
 
@@ -223,14 +507,35 @@
         koreaSubwayOverlay = value;
         syncOverlayVisibility(DEFAULT_STYLE);
       },
+      prepareHomeReturn() {
+        activeStyle = DEFAULT_STYLE;
+        suppressHighResUnderlayUntil = Date.now() + 6500;
+        syncLatestSatelliteHybridLayer();
+        window.setTimeout(syncLatestSatelliteHybridLayer, 6600);
+      },
+      finishHomeReturn() {
+        activeStyle = DEFAULT_STYLE;
+        latestSatelliteHighResFallback = false;
+        suppressHighResUnderlayUntil = Date.now() + 4500;
+        syncLatestSatelliteHybridLayer();
+        window.setTimeout(syncLatestSatelliteHybridLayer, 4600);
+      },
       wireProviderRecovery() {
         const fallbackToSatellite = () => {
-          Object.entries(baseLayers).forEach(([name, layer]) => {
-            const active = name === 'satellite';
-            layer.show = active;
-            layer.alpha = active ? 1 : 0;
+          activeStyle = 'latestSatellite';
+          Object.values(baseLayers).forEach(layer => {
+            if (!layer) return;
+            layer.show = false;
+            layer.alpha = 0;
           });
-          applyBaseLayerTuning('satellite');
+          baseLayers.satellite.show = true;
+          baseLayers.satellite.alpha = 1;
+          if (baseLayers.latestSatellite) {
+            baseLayers.latestSatellite.show = false;
+            baseLayers.latestSatellite.alpha = 0;
+          }
+          applyBaseLayerTuning('latestSatellite');
+          syncOverlayVisibility('latestSatellite');
           if (koreaSubwayOverlay) koreaSubwayOverlay.setVisible(false);
           viewer.scene.requestRender();
         };
@@ -245,18 +550,76 @@
         });
       },
       setStyle(style) {
-        const key = baseLayers[style] ? style : DEFAULT_STYLE;
-        Object.entries(baseLayers).forEach(([name, layer]) => {
-          const active = name === key;
-          layer.show = active;
-          layer.alpha = active ? 1 : 0;
+        const normalized = style === 'satellite' ? 'latestSatellite' : style;
+        const key = normalized === 'latestSatellite' || baseLayers[normalized] ? normalized : DEFAULT_STYLE;
+        activeStyle = key;
+        Object.values(baseLayers).forEach(layer => {
+          if (!layer) return;
+          layer.show = false;
+          layer.alpha = 0;
         });
+        if (key === 'latestSatellite') {
+          syncLatestSatelliteHybridLayer();
+        } else if (baseLayers[key]) {
+          baseLayers[key].show = true;
+          baseLayers[key].alpha = 1;
+        }
         applyBaseLayerTuning(key);
         syncOverlayVisibility(key);
         return key;
       },
     };
+
+    async function refreshLatestSatelliteLayer() {
+      if (!dailySatelliteEnabled || !baseLayers.latestSatellite) return;
+      const candidates = getLatestSatelliteCandidateDates();
+      for (const date of candidates) {
+        const ok = await testLatestSatelliteDate(date);
+        if (!ok) continue;
+        saveCachedLatestSatelliteDate(date);
+        const currentProvider = baseLayers.latestSatellite && baseLayers.latestSatellite.imageryProvider;
+        const currentUrl = currentProvider && currentProvider.url;
+        if (typeof currentUrl === 'string' && currentUrl.indexOf('/' + date + '/') !== -1) {
+          latestActiveDate = date;
+          updateSatelliteDateLabels(latestActiveDate, activeStyle === 'latestSatellite' && latestSatelliteHighResFallback);
+          return;
+        }
+        const wasActive = activeStyle === 'latestSatellite';
+        const oldLayer = baseLayers.latestSatellite;
+        const newLayer = viewer.imageryLayers.addImageryProvider(createLatestSatelliteProvider(date), 0);
+        latestActiveDate = date;
+        const useHighResFallback = wasActive && shouldUseHighResSatelliteFallback();
+        newLayer.show = wasActive && !useHighResFallback;
+        newLayer.alpha = wasActive && !useHighResFallback ? 1.0 : 0;
+        attachLatestSatelliteRecovery(newLayer);
+        baseLayers.latestSatellite = newLayer;
+        try { viewer.imageryLayers.remove(oldLayer, true); } catch (error) {}
+        updateSatelliteDateLabels(latestActiveDate, useHighResFallback);
+        if (wasActive) {
+          applyBaseLayerTuning('latestSatellite');
+          syncLatestSatelliteHybridLayer();
+        }
+        viewer.scene.requestRender();
+        return;
+      }
+      console.warn('latest satellite imagery date check failed; using cached/default NASA GIBS date.');
+    }
+
+    let latestHybridRaf = null;
+    function scheduleLatestSatelliteHybridSync() {
+      if (activeStyle !== 'latestSatellite') return;
+      if (latestHybridRaf) return;
+      latestHybridRaf = window.requestAnimationFrame(() => {
+        latestHybridRaf = null;
+        syncLatestSatelliteHybridLayer();
+      });
+    }
+    if (dailySatelliteEnabled && viewer.camera && viewer.camera.changed && typeof viewer.camera.changed.addEventListener === 'function') {
+      viewer.camera.changed.addEventListener(scheduleLatestSatelliteHybridSync);
+    }
+
     manager.wireProviderRecovery();
+    if (dailySatelliteEnabled) window.setTimeout(refreshLatestSatelliteLayer, 800);
     return manager;
   }
 
@@ -467,7 +830,7 @@
     function makeLineDotsCanvas(lines) {
       try {
         const dpr = Math.min(window.devicePixelRatio || 1, 3);
-        const isMobile = window.matchMedia('(max-width: 768px)').matches;
+        const isMobile = isMobileDevice();
         const dotR = isMobile ? 4 : 5; // 모바일에서 작게
         const gap = 3;
         const n = lines.length;
@@ -1146,11 +1509,11 @@ out geom qt;`;
     scene.globe.enableLighting = false;
     scene.globe.depthTestAgainstTerrain = false;
     // 타일 해상도: 모바일은 SSE 높여 타일 요청 수 대폭 절감 (트래픽 핵심)
-    scene.globe.maximumScreenSpaceError = isMobile ? 3.5 : 1.5;
+    scene.globe.maximumScreenSpaceError = isMobile ? 5.0 : 1.8;
     scene.globe.preloadAncestors = !isMobile; // 모바일: 선제 로딩 비활성화
-    scene.globe.loadingDescendantsLimit = isMobile ? 4 : 16;
+    scene.globe.loadingDescendantsLimit = isMobile ? 3 : 12;
     // 캐시: 모바일 메모리 절약, PC는 재다운로드 방지
-    scene.globe.tileCacheSize = isMobile ? 150 : 600;
+    scene.globe.tileCacheSize = isMobile ? 96 : 420;
     scene.skyAtmosphere.show = false;
     scene.sun.show = false;
     scene.moon.show = false;
@@ -1165,8 +1528,8 @@ out geom qt;`;
 
     // HiDPI 지원: 데스크탑 최대 1.75×, 모바일은 1.0 고정 (성능 우선)
     const dpr = window.devicePixelRatio || 1;
-    viewer.resolutionScale = isMobile ? 1.0 : Math.min(dpr, 1.75);
-    viewer.targetFrameRate = isMobile ? 30 : 60;
+    viewer.resolutionScale = isMobile ? Math.min(dpr, 0.9) : Math.min(dpr, 1.5);
+    viewer.targetFrameRate = isMobile ? 30 : 45;
 
     const controller = scene.screenSpaceCameraController;
     controller.maximumZoomDistance = HOME_VIEW.alt;
@@ -1435,9 +1798,32 @@ out geom qt;`;
     });
   }
 
-  function wireHomeButton(viewer, sharedState) {
+  function wireHomeButton(viewer, sharedState, styleManager) {
+    const restoreHomeSatellite = () => {
+      sharedState.lastSearchResult = null;
+      sharedState.currentStyle = DEFAULT_STYLE;
+      if (styleManager && typeof styleManager.finishHomeReturn === 'function') {
+        styleManager.finishHomeReturn();
+      } else if (styleManager && typeof styleManager.setStyle === 'function') {
+        styleManager.setStyle(DEFAULT_STYLE);
+      }
+      document.querySelectorAll('#style-panel [data-style]').forEach(item => {
+        item.classList.toggle('active', item.dataset.style === DEFAULT_STYLE);
+      });
+      viewer.scene.requestRender();
+    };
+
     document.getElementById('globe-home-btn').addEventListener('click', () => {
       sharedState.lastSearchResult = null;
+      sharedState.currentStyle = DEFAULT_STYLE;
+      if (styleManager && typeof styleManager.prepareHomeReturn === 'function') {
+        styleManager.prepareHomeReturn();
+      } else if (styleManager && typeof styleManager.setStyle === 'function') {
+        styleManager.setStyle(DEFAULT_STYLE);
+      }
+      document.querySelectorAll('#style-panel [data-style]').forEach(item => {
+        item.classList.toggle('active', item.dataset.style === DEFAULT_STYLE);
+      });
       viewer.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW.lon, HOME_VIEW.lat, HOME_VIEW.alt),
         orientation: {
@@ -1446,7 +1832,10 @@ out geom qt;`;
           roll: HOME_VIEW.roll,
         },
         duration: 1.8,
+        complete: restoreHomeSatellite,
+        cancel: restoreHomeSatellite,
       });
+      window.setTimeout(restoreHomeSatellite, 2100);
     });
   }
 

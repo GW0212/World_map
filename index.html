@@ -185,10 +185,21 @@
     .fav-actions button { border: 0; border-radius: 8px; padding: 7px 8px; cursor: pointer; background: rgba(255,255,255,.1); color: #fff; font-size: 11px; }
     .fav-empty { color: #94a3b8; font-size: 12px; padding: 8px 2px; }
     #favorites-panel { width: 320px; }
-    #style-panel { width: 220px; }
+    #style-panel { width: 260px; }
     .style-options { display: grid; gap: 8px; }
-    .style-option { background: rgba(255,255,255,.08); text-align: left; }
+    .style-option {
+      background: rgba(255,255,255,.08);
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 3px;
+      line-height: 1.18;
+    }
+    .style-name { font-size: 12px; font-weight: 800; }
+    .style-date { font-size: 9.5px; font-weight: 700; color: rgba(203,213,225,.82); }
     .style-option.active { background: linear-gradient(180deg, #2563eb, #1d4ed8); }
+    .style-option.active .style-date { color: rgba(219,234,254,.92); }
 
     #minimap {
       position: fixed; right: 16px; top: 120px; z-index: 24;
@@ -297,9 +308,9 @@
         left: auto;
         right: calc(62px + env(safe-area-inset-right));
         bottom: calc(124px + env(safe-area-inset-bottom));
-        width: 176px;
+        width: 214px;
         max-width: calc(100vw - 86px);
-        max-height: 220px;
+        max-height: 260px;
         border-radius: 16px;
         padding: 12px;
       }
@@ -330,7 +341,7 @@
   <div id="loading">
     <div class="ld-globe"></div>
     <div class="ld-title">World Map</div>
-    <div class="ld-sub">ESRI World Imagery 연결 중...</div>
+    <div class="ld-sub">고해상도 위성 지도 연결 중...</div>
     <div class="ld-dots"><div class="ld-dot"></div><div class="ld-dot"></div><div class="ld-dot"></div></div>
   </div>
 
@@ -391,10 +402,16 @@
 
   <div id="style-panel" class="tool-panel">
     <div class="panel-title">지도 스타일</div>
-    <div class="panel-desc">위성 / 일반 모드를 전환할 수 있습니다.</div>
+    <div class="panel-desc">기본은 최신 위성으로 표시하고, 가까이 확대할 때만 고해상도 위성으로 자동 전환됩니다.</div>
     <div class="style-options">
-      <button type="button" class="style-option" data-style="satellite">위성</button>
-      <button type="button" class="style-option" data-style="roadmap">일반 지도</button>
+      <button type="button" class="style-option" data-style="latestSatellite">
+        <span class="style-name">고해상도 위성</span>
+        <span class="style-date" id="latest-satellite-date-text" hidden></span>
+      </button>
+      <button type="button" class="style-option" data-style="roadmap">
+        <span class="style-name">일반 지도</span>
+        <span class="style-date">지하철역/노선 표시</span>
+      </button>
     </div>
   </div>
 
@@ -420,9 +437,9 @@
   <script src="data/countries.js?v=20260409c"></script>
   <script src="data/regions.js?v=20260409c"></script>
   <script src="data/cities.js?v=20260409c"></script>
-  <script src="data/subway_stations_kr.js?v=20260428-mobile-subway-anchor-fixed"></script>
-  <script src="data/subway_regions_kr.js?v=20260428-mobile-subway-anchor-fixed"></script>
+  <script src="data/subway_stations_kr.js?v=20260428-home-latest-no-flash-fixed"></script>
+  <script src="data/subway_regions_kr.js?v=20260428-home-latest-no-flash-fixed"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260428-mobile-subway-anchor-fixed"></script>
+  <script src="js/app.js?v=20260428-home-latest-no-flash-fixed"></script>
 </body>
 </html>
