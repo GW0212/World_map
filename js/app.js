@@ -302,7 +302,7 @@
 
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEYS = ['worldmap:korea-subway-overlay:v34', 'worldmap:korea-subway-overlay:v33', 'worldmap:korea-subway-overlay:v28', 'worldmap:korea-subway-overlay:v27', 'worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
+    const CACHE_KEYS = ['worldmap:korea-subway-overlay:v40-national', 'worldmap:korea-subway-overlay:v35', 'worldmap:korea-subway-overlay:v34', 'worldmap:korea-subway-overlay:v33', 'worldmap:korea-subway-overlay:v28', 'worldmap:korea-subway-overlay:v27', 'worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
     const CACHE_TTL = 1000 * 60 * 60 * 24 * 14;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
     dataSource.show = false;
@@ -351,15 +351,66 @@
       return /(월미바다열차|월미은하레일|자기부상열차|관광열차|관광\s*모노레일|케이블카|삭도)/i.test(text);
     }
 
+    function datasetRegionalCoverage(data = {}) {
+      const stations = Array.isArray(data.stations) ? data.stations : [];
+      const inBox = (station, south, west, north, east) => {
+        const lat = Number(station.lat);
+        const lon = Number(station.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) && lat >= south && lat <= north && lon >= west && lon <= east;
+      };
+      return {
+        capital: stations.filter(s => inBox(s, 36.6, 126.0, 38.5, 128.2)).length,
+        busan: stations.filter(s => inBox(s, 34.9, 128.65, 35.45, 129.35)).length,
+        daegu: stations.filter(s => inBox(s, 35.75, 128.35, 36.05, 128.85)).length,
+        daejeon: stations.filter(s => inBox(s, 36.20, 127.20, 36.50, 127.55)).length,
+        gwangju: stations.filter(s => inBox(s, 35.05, 126.70, 35.30, 127.00)).length,
+      };
+    }
+
+    function datasetHasNationalCoverage(data = {}) {
+      const coverage = datasetRegionalCoverage(data);
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+      const lineText = lines.map(line => String(line.name || '')).join(' ');
+      const hasLine = (pattern) => pattern.test(lineText);
+      return (
+        coverage.capital >= 50 &&
+        (coverage.busan >= 8 || hasLine(/부산|동해|김해/i)) &&
+        (coverage.daegu >= 5 || hasLine(/대구/i)) &&
+        (coverage.daejeon >= 3 || hasLine(/대전/i)) &&
+        (coverage.gwangju >= 3 || hasLine(/광주/i))
+      );
+    }
+
+    function isUsableSubwayDataset(data) {
+      // 수도권만 들어간 캐시가 최신으로 남아 있으면 부산/대구/대전/광주가 계속 안 뜬다.
+      // 전체 노선 수 + 지역 커버리지까지 확인한 데이터만 정상 캐시로 인정한다.
+      return !!(
+        data &&
+        Array.isArray(data.lines) && data.lines.length >= 10 &&
+        Array.isArray(data.stations) && data.stations.length >= 20 &&
+        datasetHasNationalCoverage(data)
+      );
+    }
+
     function parseCached() {
       try {
         let best = null;
         CACHE_KEYS.forEach((cacheKey) => {
           const raw = localStorage.getItem(cacheKey);
           if (!raw) return;
-          const cached = JSON.parse(raw);
-          if (!cached || !cached.timestamp || !cached.data) return;
-          if (!best || cached.timestamp > best.timestamp) best = cached;
+          try {
+            const cached = JSON.parse(raw);
+            if (!cached || !cached.timestamp || !cached.data) return;
+            if (!isUsableSubwayDataset(cached.data)) {
+              // 이전 빌드에서 생긴 fallback-only 캐시 정리
+              try { localStorage.removeItem(cacheKey); } catch (_) { /* ignore */ }
+              return;
+            }
+            if (!best || cached.timestamp > best.timestamp) best = cached;
+          } catch (itemError) {
+            console.warn('subway cache item parse failed', cacheKey, itemError);
+            try { localStorage.removeItem(cacheKey); } catch (_) { /* ignore */ }
+          }
         });
         if (!best) return null;
         return { data: best.data, expired: Date.now() - best.timestamp > CACHE_TTL, timestamp: best.timestamp };
@@ -371,9 +422,12 @@
 
     function storeCache(data) {
       try {
+        if (!isUsableSubwayDataset(data)) return;
         const payload = JSON.stringify({ timestamp: Date.now(), data });
-        CACHE_KEYS.forEach((cacheKey) => {
-          localStorage.setItem(cacheKey, payload);
+        // 동일한 대용량 데이터를 여러 키에 중복 저장하지 않아 모바일 메모리 스파이크를 줄인다.
+        localStorage.setItem(CACHE_KEYS[0], payload);
+        CACHE_KEYS.slice(1).forEach((cacheKey) => {
+          try { localStorage.removeItem(cacheKey); } catch (_) { /* ignore */ }
         });
         window.KR_SUBWAY_OVERLAY_DATA = data;
       } catch (error) {
@@ -759,7 +813,7 @@
       elements.forEach((el) => {
         if (el.type !== 'node' || !Number.isFinite(el.lon) || !Number.isFinite(el.lat)) return;
         const tags = el.tags || {};
-        if (!selectedMemberNodeIds.has(el.id)) return;
+        if (!selectedMemberNodeIds.has(el.id) && !nodeLooksLikeStation(tags)) return;
         if (isExcludedUrbanRail(tags)) return;
         const name = tags['name:ko'] || tags.name || tags.official_name || '';
         if (!name) return;
@@ -799,11 +853,16 @@
       const endpoints = [
         'https://overpass.kumi.systems/api/interpreter',
         DATA_URL,
+        'https://z.overpass-api.de/api/interpreter',
+        'https://overpass.osm.ch/api/interpreter',
         'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
       ];
-      const requests = endpoints.map((endpoint) => new Promise(async (resolve, reject) => {
+      const timeoutMs = window.matchMedia('(max-width: 768px)').matches ? 75000 : 60000;
+      const minElements = 20;
+
+      async function requestEndpoint(endpoint) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 55000);
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const response = await fetch(endpoint, {
             method: 'POST',
@@ -812,14 +871,35 @@
             signal: controller.signal,
             cache: 'no-store',
           });
-          clearTimeout(timer);
           if (!response.ok) throw new Error('HTTP ' + response.status + ' @ ' + endpoint);
-          resolve(await response.json());
-        } catch (error) {
+          const json = await response.json();
+          if (!json || !Array.isArray(json.elements) || json.elements.length < minElements) {
+            throw new Error('Overpass partial/empty response @ ' + endpoint);
+          }
+          return json;
+        } finally {
           clearTimeout(timer);
-          console.warn('overpass endpoint failed:', endpoint, error);
-          reject(error);
         }
+      }
+
+      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      if (isMobile) {
+        // 모바일은 동시 5개 요청을 피하고 순차 재시도한다. 새로고침/탭 종료 방지용.
+        let lastError = null;
+        for (const endpoint of endpoints) {
+          try {
+            return await requestEndpoint(endpoint);
+          } catch (error) {
+            lastError = error;
+            console.warn('overpass endpoint failed:', endpoint, error);
+          }
+        }
+        throw lastError || new Error('No overpass endpoint available');
+      }
+
+      const requests = endpoints.map((endpoint) => requestEndpoint(endpoint).catch((error) => {
+        console.warn('overpass endpoint failed:', endpoint, error);
+        throw error;
       }));
       if (typeof Promise.any === 'function') {
         return Promise.any(requests);
@@ -837,26 +917,115 @@
       });
     }
 
+    function mergeSubwayDatasets(datasets = []) {
+      const merged = { lines: [], stations: [] };
+      const lineSeen = new Set();
+      const stationSeen = new Set();
+      datasets.forEach((dataset) => {
+        if (!dataset) return;
+        (Array.isArray(dataset.lines) ? dataset.lines : []).forEach((line) => {
+          if (!Array.isArray(line.positions) || line.positions.length < 2) return;
+          const first = line.positions[0] || [];
+          const last = line.positions[line.positions.length - 1] || [];
+          const key = [line.name || '', line.color || '', Number(first[0] || 0).toFixed(4), Number(first[1] || 0).toFixed(4), Number(last[0] || 0).toFixed(4), Number(last[1] || 0).toFixed(4), line.positions.length].join('|');
+          if (lineSeen.has(key)) return;
+          lineSeen.add(key);
+          merged.lines.push({
+            name: line.name || '지하철',
+            color: line.color || resolveColor({ name: line.name || '' }),
+            positions: line.positions.map(pos => [Number(pos[0]), Number(pos[1])]).filter(pos => Number.isFinite(pos[0]) && Number.isFinite(pos[1])),
+          });
+        });
+        (Array.isArray(dataset.stations) ? dataset.stations : []).forEach((station) => {
+          const name = station.name || station.nameKo || '';
+          const lat = Number(station.lat);
+          const lon = Number(station.lon);
+          if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          const key = getStationLabelKey(name) + ':' + lat.toFixed(5) + ':' + lon.toFixed(5);
+          if (stationSeen.has(key)) return;
+          stationSeen.add(key);
+          merged.stations.push({
+            name,
+            lat,
+            lon,
+            line: normalizeLineName(station.line || ''),
+            color: station.color || resolveColor({ ref: station.line || '', name: station.line || '' }),
+            aliases: Array.isArray(station.aliases) ? station.aliases.slice() : [],
+          });
+        });
+      });
+      return merged;
+    }
+
     function getFallbackDataset() {
       const fallbackStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
+      const staticOverlay = window.KR_SUBWAY_STATIC_OVERLAY || {};
+      const regionalOverlay = window.KR_SUBWAY_REGIONAL_STATIC_OVERLAY || {};
       const globalData = window.KR_SUBWAY_OVERLAY_DATA || null;
       const cached = parseCached();
-      const cachedLines = Array.isArray(globalData?.lines) ? globalData.lines : (Array.isArray(cached?.data?.lines) ? cached.data.lines : []);
-      const cachedStations = Array.isArray(globalData?.stations) ? globalData.stations : (Array.isArray(cached?.data?.stations) ? cached.data.stations : []);
-      return {
-        lines: cachedLines,
-        stations: [
-          ...cachedStations,
-          ...fallbackStations.map((station) => ({
-            name: station.name || station.nameKo || '',
-            lat: Number(station.lat),
-            lon: Number(station.lon),
-            line: station.line || '',
-            color: station.color || '#ffffff',
-            aliases: Array.isArray(station.aliases) ? station.aliases.slice() : [],
-          }))
-        ],
-      };
+      const cachedData = (globalData && isUsableSubwayDataset(globalData)) ? globalData : (cached && cached.data ? cached.data : null);
+      return mergeSubwayDatasets([
+        cachedData,
+        {
+          lines: Array.isArray(staticOverlay.lines) ? staticOverlay.lines : [],
+          stations: Array.isArray(staticOverlay.stations) ? staticOverlay.stations : [],
+        },
+        {
+          lines: Array.isArray(regionalOverlay.lines) ? regionalOverlay.lines : [],
+          stations: Array.isArray(regionalOverlay.stations) ? regionalOverlay.stations : [],
+        },
+        { lines: [], stations: fallbackStations },
+      ]);
+    }
+
+    function getRegionalSubwayQueries() {
+      const baseSelector = `
+(
+  relation["type"="route"]["route"~"subway|light_rail|monorail"];
+  relation["type"="route"]["route"="train"]["name"~"GTX|공항철도|신분당|수인|분당|경의|중앙|경춘|서해|신림|우이|김포|의정부|에버라인|인천|부산|대구|대전|광주|동해|도시철도|수도권 전철", i];
+  node["railway"~"station|halt|platform"]["station"~"subway|light_rail|monorail"];
+  node["public_transport"~"station|platform|stop_position"]["station"~"subway|light_rail|monorail"];
+);
+out body;
+>;
+out geom qt;`;
+      const regions = [
+        { name: 'capital', bbox: '36.6,126.0,38.5,128.2', timeout: 50 },
+        { name: 'busan', bbox: '34.9,128.65,35.45,129.35', timeout: 40 },
+        { name: 'daegu', bbox: '35.75,128.35,36.05,128.85', timeout: 35 },
+        { name: 'daejeon', bbox: '36.20,127.20,36.50,127.55', timeout: 30 },
+        { name: 'gwangju', bbox: '35.05,126.70,35.30,127.00', timeout: 30 },
+      ];
+      return regions.map(region => ({
+        name: region.name,
+        query: `[out:json][timeout:${region.timeout}][bbox:${region.bbox}];${baseSelector}`,
+      }));
+    }
+
+    async function fetchRegionalOverpassDatasets() {
+      const queries = getRegionalSubwayQueries();
+      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      const results = [];
+      if (isMobile) {
+        for (const item of queries) {
+          try {
+            const raw = await fetchOverpass(item.query);
+            results.push(transformOverpass(raw));
+          } catch (error) {
+            console.warn('regional subway overpass failed:', item.name, error);
+          }
+        }
+        return results;
+      }
+      const settled = await Promise.allSettled(queries.map(async (item) => {
+        const raw = await fetchOverpass(item.query);
+        return transformOverpass(raw);
+      }));
+      settled.forEach((item, index) => {
+        if (item.status === 'fulfilled') results.push(item.value);
+        else console.warn('regional subway overpass failed:', queries[index].name, item.reason);
+      });
+      return results;
     }
 
     let hasLoadedOnce = false;
@@ -896,24 +1065,18 @@
           }
         }
 
-        // ② Overpass 갱신 — 완전한 데이터가 도착할 때까지 기다렸다가 한 번에 표시
-        // bbox: 한국 전체 영역 (제주 포함) — area 조회보다 훨씬 빠름
-        const query = `
-[out:json][timeout:50][bbox:33.0,124.5,38.7,130.0];
-(
-  relation["type"="route"]["route"~"subway|light_rail|monorail"];
-  relation["type"="route"]["route"="train"]["name"~"GTX|공항철도|신분당|수인|분당|경의|중앙|경춘|서해|신림|우이|김포|의정부|에버라인|인천|부산|대구|대전|광주|동해|도시철도|수도권 전철", i];
-);
-out body;
->;
-out geom qt;`;
+        // ② Overpass 갱신 — 전국을 한 번에 조회하면 일부 서버가 수도권만 반환/타임아웃되는 경우가 있어
+        // 수도권·부산·대구·대전·광주 bbox로 분리해서 병합한다.
         try {
-          const raw = await fetchOverpass(query);
-          const transformed = transformOverpass(raw);
-          if (((transformed.lines || []).length || (transformed.stations || []).length)) {
+          const fallbackDataset = getFallbackDataset();
+          const regionalDatasets = await fetchRegionalOverpassDatasets();
+          const transformed = mergeSubwayDatasets([fallbackDataset, ...regionalDatasets]);
+          if (((transformed.lines || []).length > 0) || ((transformed.stations || []).length > 0)) {
             addEntities(transformed);
-            storeCache(transformed);
+            if (isUsableSubwayDataset(transformed)) storeCache(transformed);
             hasLoadedOnce = true;
+          } else {
+            throw new Error('Korea subway data is empty; keeping current cache/fallback');
           }
         } catch (error) {
           console.warn('Korea subway Overpass failed, using fallback data:', error);
@@ -1484,6 +1647,7 @@ out geom qt;`;
     const toast = document.getElementById('toast');
     const copyBtn = document.getElementById('copy-link-btn');
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
 
     function getCameraView() {
       const carto = viewer.camera.positionCartographic;
@@ -1535,8 +1699,12 @@ out geom qt;`;
     copyBtn.addEventListener('click', copyShareUrl);
     viewer.scene.canvas.addEventListener('contextmenu', event => event.preventDefault());
     handler.setInputAction(copyShareUrl, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
-    viewer.camera.moveEnd.addEventListener(syncHash);
-    syncHash();
+    // 모바일 주소창/히스토리 갱신이 브라우저 리사이즈와 겹치면 간헐 새로고침처럼 보일 수 있다.
+    // PC는 기존처럼 URL hash 동기화를 유지한다.
+    if (!isMobile) {
+      viewer.camera.moveEnd.addEventListener(syncHash);
+      syncHash();
+    }
   }
 
 
