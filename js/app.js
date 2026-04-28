@@ -1041,8 +1041,10 @@ out geom qt;`;
           if (cached && ((cached.data || {}).lines || []).length > 0) {
             addEntities(cached.data);
             window.KR_SUBWAY_OVERLAY_DATA = cached.data;
+            // 모바일에서 Overpass 갱신이 끝날 때까지 일반 지도 오버레이가 비어 보이지 않도록
+            // 캐시 데이터 표시가 끝나는 즉시 로드 완료 상태로 전환한다.
+            hasLoadedOnce = true;
             if (!cached.expired) {
-              hasLoadedOnce = true;
               return;
             }
           } else {
@@ -1050,6 +1052,9 @@ out geom qt;`;
             if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
               addEntities(fallbackDataset);
               window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
+              // 폴백은 5개 역짜리가 아니라 수도권+부산/대구/대전/광주 보정 데이터까지 병합된 데이터다.
+              // 이 데이터를 즉시 표시하고, Overpass는 백그라운드 갱신으로만 사용한다.
+              hasLoadedOnce = true;
             }
           }
         } catch (e) {
@@ -1059,6 +1064,7 @@ out geom qt;`;
             if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
               addEntities(fallbackDataset);
               window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
+              hasLoadedOnce = true;
             }
           } catch (fallbackError) {
             console.warn('subway fallback load failed:', fallbackError);
@@ -1067,6 +1073,11 @@ out geom qt;`;
 
         // ② Overpass 갱신 — 전국을 한 번에 조회하면 일부 서버가 수도권만 반환/타임아웃되는 경우가 있어
         // 수도권·부산·대구·대전·광주 bbox로 분리해서 병합한다.
+        // 단, 모바일은 잦은 새로고침/백그라운드 탭 종료를 막기 위해 초기 표시를 정적 데이터로 끝내고
+        // 네트워크 갱신은 사용자가 PC/넓은 화면에서 볼 때만 수행한다.
+        if (window.matchMedia('(max-width: 768px)').matches && hasLoadedOnce) {
+          return;
+        }
         try {
           const fallbackDataset = getFallbackDataset();
           const regionalDatasets = await fetchRegionalOverpassDatasets();
@@ -1106,8 +1117,12 @@ out geom qt;`;
           dataSource.show = true;
           viewer.scene.requestRender();
         } else {
-          // 아직 로딩 중 → 완료(성공/실패 무관) 후 한 번에 표시
-          // (폴백 5개 역이 먼저 노출되는 현상 방지)
+          // 모바일에서는 Overpass 백그라운드 갱신이 길어질 수 있으므로,
+          // 이미 정적/캐시 엔티티가 들어와 있으면 즉시 표시한다.
+          if (dataSource.entities.values.length > 0) {
+            dataSource.show = true;
+            viewer.scene.requestRender();
+          }
           const showWhenReady = () => {
             dataSource.show = true;
             viewer.scene.requestRender();
