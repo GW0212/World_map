@@ -631,9 +631,12 @@
             });
 
           const dotsCanvas = makeLineDotsCanvasCached(dedupedLines);
+          // 모바일에서 새로고침 직후 지하철역 라벨/아이콘이 화면 좌표처럼 따라붙는 현상 방지.
+          // 지형 클램프 대신 실제 WGS84 좌표에 고정해 카메라 이동 중에도 역 위치가 지도 좌표에 묶이도록 한다.
+          const stationPosition = Cesium.Cartesian3.fromDegrees(station.lon, station.lat, 35);
 
           dataSource.entities.add({
-            position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
+            position: stationPosition,
             label: {
               text: station.displayName || normalizeStationDisplayName(station.name) || '',
               font: 'bold 13px -apple-system, BlinkMacSystemFont, "Noto Sans KR", "Malgun Gothic", sans-serif',
@@ -644,7 +647,7 @@
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
               pixelOffset: _labelOffset,
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              heightReference: Cesium.HeightReference.NONE,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
               scaleByDistance: _labelScale,
               translucencyByDistance: _labelTranslucency,
@@ -653,13 +656,13 @@
           });
           if (!dotsCanvas) return;
           dataSource.entities.add({
-            position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
+            position: stationPosition,
             billboard: {
               image: dotsCanvas,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
               pixelOffset: _billboardOffset,
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              heightReference: Cesium.HeightReference.NONE,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
               scaleByDistance: _billboardScale,
               translucencyByDistance: _billboardTranslucency,
@@ -2244,8 +2247,25 @@ out geom qt;`;
         syncTopDownCamera();
       });
     };
+    // requestRenderMode 상태에서 모바일 드래그 중 라벨/아이콘이 한 프레임 늦게 고정되는 것을 방지한다.
+    let renderQueued = false;
+    const queueCameraRender = () => {
+      if (renderQueued) return;
+      renderQueued = true;
+      requestAnimationFrame(() => {
+        renderQueued = false;
+        viewer.scene.requestRender();
+      });
+    };
+
     viewer.camera.changed.addEventListener(queueTopDownSync);
-    viewer.camera.moveEnd.addEventListener(syncTopDownCamera);
+    viewer.camera.changed.addEventListener(queueCameraRender);
+    viewer.camera.moveStart.addEventListener(queueCameraRender);
+    viewer.camera.moveEnd.addEventListener(() => {
+      syncTopDownCamera();
+      queueCameraRender();
+      setTimeout(queueCameraRender, 80);
+    });
     syncTopDownCamera();
 
     // 모바일 브라우저 pull-to-refresh / 확대 제스처로 UI가 사라지는 현상 방지
