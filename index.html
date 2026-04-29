@@ -219,6 +219,30 @@
     #mouse-info .mi-k { color: #94a3b8; font-weight: 700; }
     #mouse-info .mi-v { color: #f8fafc; font-weight: 800; }
 
+
+    #imagery-meta-card {
+      position: fixed; z-index: 460; display: none; pointer-events: auto;
+      width: 292px; max-width: calc(100vw - 24px); padding: 13px 14px 12px;
+      border: 1px solid rgba(148,163,184,.22); border-radius: 16px;
+      background: rgba(15, 23, 42, 0.94); color: #e5eefc;
+      box-shadow: 0 16px 42px rgba(0,0,0,.42); backdrop-filter: blur(12px);
+    }
+    #imagery-meta-card.show { display: block; }
+    .im-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+    .im-title { font-size: 13px; font-weight: 900; letter-spacing: -.2px; }
+    #imagery-meta-close {
+      width: 26px; height: 26px; border: 0; border-radius: 999px; cursor: pointer;
+      background: rgba(255,255,255,.1); color: #fff; font-size: 16px; line-height: 1;
+    }
+    .im-status { font-size: 12px; color: #cbd5e1; line-height: 1.55; }
+    .im-grid { display: grid; gap: 7px; }
+    .im-row { display: grid; grid-template-columns: 74px 1fr; gap: 8px; align-items: start; }
+    .im-k { color: #94a3b8; font-size: 10px; font-weight: 800; letter-spacing: .3px; }
+    .im-v { color: #f8fafc; font-size: 12px; font-weight: 800; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere; }
+    .im-note { margin-top: 9px; color: #94a3b8; font-size: 10.5px; line-height: 1.45; }
+
+    #imagery-meta-crosshair, #imagery-meta-mobile-btn { display: none; }
+
     #toast {
       position: fixed; left: 50%; top: 88px; transform: translateX(-50%) translateY(-10px);
       z-index: 500; background: rgba(15,23,42,.94); color: #fff; border-radius: 999px;
@@ -331,6 +355,33 @@
         width: calc(100vw - 32px); text-align: center; border-radius: 12px;
       }
 
+      #imagery-meta-crosshair {
+        position: fixed; left: 50%; top: 50%; z-index: 32; display: block;
+        width: 34px; height: 34px; transform: translate(-50%, -50%); pointer-events: none;
+        filter: drop-shadow(0 3px 8px rgba(0,0,0,.55));
+      }
+      #imagery-meta-crosshair::before, #imagery-meta-crosshair::after {
+        content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        background: rgba(255,255,255,.92); border-radius: 999px;
+      }
+      #imagery-meta-crosshair::before { width: 2px; height: 34px; }
+      #imagery-meta-crosshair::after { width: 34px; height: 2px; }
+      #imagery-meta-crosshair span {
+        position: absolute; inset: 9px; border: 2px solid rgba(37,99,235,.95); border-radius: 50%;
+        background: rgba(15,23,42,.18);
+      }
+      #imagery-meta-mobile-btn {
+        position: fixed; left: 50%; bottom: 68px; bottom: calc(68px + env(safe-area-inset-bottom));
+        z-index: 61; display: inline-flex; align-items: center; justify-content: center;
+        transform: translateX(-50%); min-width: 196px; max-width: calc(100vw - 116px);
+        height: 44px; padding: 0 16px; border: 0; border-radius: 999px; cursor: pointer;
+        background: linear-gradient(180deg, #2563eb, #1d4ed8); color: #fff;
+        font-size: 13px; font-weight: 900; letter-spacing: -.2px;
+        box-shadow: 0 14px 32px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.18);
+        backdrop-filter: blur(10px); white-space: nowrap;
+      }
+      #imagery-meta-mobile-btn:active { transform: translateX(-50%) scale(.98); }
+
       /* 검색 결과 아이템 터치 영역 */
       .r-item { min-height: 52px; padding: 10px 14px; }
       .r-name { font-size: 15px; }
@@ -346,10 +397,21 @@
   </div>
 
   <div id="cesiumContainer"></div>
+  <div id="imagery-meta-crosshair" aria-hidden="true"><span></span></div>
+  <button id="imagery-meta-mobile-btn" type="button">중앙 위치 촬영일 확인</button>
   <div id="toast">링크가 복사되었습니다.</div>
 
   <div id="mouse-info">
     <div class="mi-row"><span class="mi-v" id="mi-place" style="font-size:12px;max-width:240px;white-space:normal;line-height:1.4">위치 확인 중...</span></div>
+  </div>
+
+
+  <div id="imagery-meta-card" aria-live="polite">
+    <div class="im-head">
+      <div class="im-title">위성 사진 정보</div>
+      <button id="imagery-meta-close" type="button" title="닫기">×</button>
+    </div>
+    <div id="imagery-meta-content" class="im-status">PC는 지도 클릭, 모바일은 중앙 십자선 기준으로 촬영일을 조회합니다.</div>
   </div>
 
   <div id="search-wrap">
@@ -402,7 +464,7 @@
 
   <div id="style-panel" class="tool-panel">
     <div class="panel-title">지도 스타일</div>
-    <div class="panel-desc">기본은 최신 위성으로 표시하고, 가까이 확대할 때만 고해상도 위성으로 자동 전환됩니다.</div>
+    <div class="panel-desc">첫 화면부터 고해상도 위성으로 표시됩니다.</div>
     <div class="style-options">
       <button type="button" class="style-option" data-style="latestSatellite">
         <span class="style-name">고해상도 위성</span>
@@ -440,6 +502,6 @@
   <script src="data/subway_stations_kr.js?v=20260428-home-latest-no-flash-fixed"></script>
   <script src="data/subway_regions_kr.js?v=20260428-home-latest-no-flash-fixed"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260428-home-latest-no-flash-fixed"></script>
+  <script src="js/app.js?v=20260429-esri-metadata-mobile-center"></script>
 </body>
 </html>
