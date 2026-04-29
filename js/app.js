@@ -691,9 +691,23 @@
 
   function createKoreaSubwayOverlay(viewer) {
     const DATA_URL = 'https://overpass-api.de/api/interpreter';
-    const CACHE_KEYS = ['worldmap:korea-subway-overlay:v40-national', 'worldmap:korea-subway-overlay:v35', 'worldmap:korea-subway-overlay:v34', 'worldmap:korea-subway-overlay:v33', 'worldmap:korea-subway-overlay:v28', 'worldmap:korea-subway-overlay:v27', 'worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
+    // v47: 전국 정적 보강 데이터 보강 + 3호선 지역 오인 보정.
+    // 정적 노선만 사용해 지하철역/노선 누락, 노선 분기, 중복 점, 중간 끊김을 차단한다.
+    const CACHE_KEY = 'worldmap:korea-subway-overlay:v47-national-complete-static';
+    const LEGACY_CACHE_KEYS = ['worldmap:korea-subway-overlay:v46-national-static-full', 'worldmap:korea-subway-overlay:v45-static-topology', 'worldmap:korea-subway-overlay:v44-label-line-stable', 'worldmap:korea-subway-overlay:v43-station-dedupe', 'worldmap:korea-subway-overlay:v42-transfer-line-dots', 'worldmap:korea-subway-overlay:v41-clean-static-lines', 'worldmap:korea-subway-overlay:v40-national', 'worldmap:korea-subway-overlay:v35', 'worldmap:korea-subway-overlay:v34', 'worldmap:korea-subway-overlay:v33', 'worldmap:korea-subway-overlay:v28', 'worldmap:korea-subway-overlay:v27', 'worldmap:korea-subway-overlay:v25', 'worldmap:korea-subway-overlay:v24', 'worldmap:korea-subway-overlay:v2'];
+    const CACHE_KEYS = [CACHE_KEY];
     const CACHE_TTL = 1000 * 60 * 60 * 24 * 14;
     const dataSource = new Cesium.CustomDataSource('korea-subway-overlay');
+
+    function purgeLegacySubwayCache() {
+      try {
+        LEGACY_CACHE_KEYS.forEach((cacheKey) => localStorage.removeItem(cacheKey));
+      } catch (error) {
+        console.warn('legacy subway cache cleanup failed:', error);
+      }
+    }
+
+    purgeLegacySubwayCache();
     dataSource.show = false;
     viewer.dataSources.add(dataSource);
     window.KR_SUBWAY_OVERLAY_DATA = window.KR_SUBWAY_OVERLAY_DATA || null;
@@ -706,6 +720,7 @@
       '서해선': '#8FC31F', '신림선': '#6789CA', '우이신설선': '#B7C452', '김포골드라인': '#A17800',
       '의정부경전철': '#FDA600', '에버라인': '#6FB245', '인천1호선': '#7CA8D5', '인천2호선': '#ED8B00',
       '부산1호선': '#F06A00', '부산2호선': '#81BF48', '부산3호선': '#BB8C00', '부산4호선': '#2D9EDB',
+      '부산김해경전철': '#875CAC', '부산-김해경전철': '#875CAC', '김해경전철': '#875CAC',
       '동해선': '#0054A6', '대구1호선': '#D93F5C', '대구2호선': '#00A84D', '대구3호선': '#F4A116',
       '대전1호선': '#007448', '광주1호선': '#0090D2', 'GTX-A': '#9B6B43'
     };
@@ -829,7 +844,7 @@
       return String(name).trim()
         .replace(/\s*[\(（][^\)）]*[\)）]/g, '')
         .replace(/역$/, '')
-        .replace(/\s+/g, ' ')
+        .replace(/[\s\u00A0\u200B\u200C\u200D_.·ㆍ-]+/g, '')
         .trim();
     }
 
@@ -838,9 +853,19 @@
       const cleaned = String(name).trim()
         .replace(/\s*[\(（][^\)）]*[\)）]/g, '')
         .replace(/역$/, '')
+        .replace(/[\u00A0\u200B\u200C\u200D]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
       return cleaned ? cleaned + '역' : '';
+    }
+
+    function getStationRenderKey(station) {
+      const nameKey = getStationLabelKey(station && (station.displayName || station.name || ''));
+      const lat = Number(station && station.lat);
+      const lon = Number(station && station.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return nameKey || '';
+      // 약 10m 단위로 묶어 동일 위치에 같은 이름 라벨이 2개 쌓이는 현상을 최종 렌더링 단계에서 한 번 더 차단한다.
+      return nameKey + ':' + lat.toFixed(4) + ':' + lon.toFixed(4);
     }
 
     function getStationDistanceMeters(a, b) {
@@ -896,6 +921,533 @@
       return canvas;
     }
 
+    function normalizeRailMatchKey(value = '') {
+      return String(value || '')
+        .replace(/[·ㆍ\-_/\s]/g, '')
+        .replace(/수인분당/g, '수인분당')
+        .replace(/공항철도선/g, '공항철도')
+        .toLowerCase();
+    }
+
+    function normalizeColorKey(value = '') {
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function railNameLooksSame(a = '', b = '') {
+      const ak = normalizeRailMatchKey(a);
+      const bk = normalizeRailMatchKey(b);
+      if (!ak || !bk) return false;
+      return ak === bk || ak.includes(bk) || bk.includes(ak);
+    }
+
+    function lineGeometryMatchesStationLine(geom, stationLine) {
+      if (!geom || !stationLine) return false;
+      const geomColor = normalizeColorKey(geom.color);
+      const stationColor = normalizeColorKey(stationLine.color);
+      if (geomColor && stationColor && geomColor === stationColor) return true;
+      return railNameLooksSame(geom.name, stationLine.line);
+    }
+
+    function distanceBetweenLinePoints(a, b) {
+      if (!Array.isArray(a) || !Array.isArray(b)) return Infinity;
+      const aLon = Number(a[0]);
+      const aLat = Number(a[1]);
+      const bLon = Number(b[0]);
+      const bLat = Number(b[1]);
+      if (![aLon, aLat, bLon, bLat].every(Number.isFinite)) return Infinity;
+      const avgLat = (aLat + bLat) / 2;
+      const dx = (aLon - bLon) * Math.cos(Cesium.Math.toRadians(avgLat)) * 111320;
+      const dy = (aLat - bLat) * 111320;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function sanitizeLinePositions(positions = []) {
+      const result = [];
+      (Array.isArray(positions) ? positions : []).forEach((point) => {
+        if (!Array.isArray(point) || point.length < 2) return;
+        const lon = Number(point[0]);
+        const lat = Number(point[1]);
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+        const next = [lon, lat];
+        const prev = result[result.length - 1];
+        if (prev && distanceBetweenLinePoints(prev, next) < 3) return;
+        result.push(next);
+      });
+      return result;
+    }
+
+    function repairKnownLinePositions(lineName = '', positions = []) {
+      const normalizedName = normalizeRailMatchKey(lineName);
+      if (normalizedName.includes('공항철도')) {
+        // 공항철도는 영종역이 터미널 뒤로 섞이면 인천공항 구간에 긴 대각선/갈라짐이 생긴다.
+        // 실제 운행 순서 기준으로 고정한다.
+        return [
+          [126.972559, 37.554648],
+          [126.951592, 37.544018],
+          [126.925381, 37.557192],
+          [126.900984, 37.576646],
+          [126.8243724, 37.5669356],
+          [126.801058, 37.562434],
+          [126.735637, 37.571462],
+          [126.673728, 37.569104],
+          [126.625327, 37.555878],
+          [126.523700, 37.511466],
+          [126.493790, 37.492904],
+          [126.476241, 37.458366],
+          [126.452508, 37.447464],
+          [126.433700, 37.468700]
+        ];
+      }
+      if (normalizedName === '3호선' || normalizedName === '서울3호선' || normalizedName === '수도권3호선') {
+        // 수도권 3호선만 고양 구간 순서를 보정한다.
+        // 이전 조건이 부산3호선/대구3호선까지 서울 3호선으로 덮어써서 지역 노선이 사라지는 문제가 있었다.
+        return [
+          [126.747569, 37.676087],
+          [126.761334, 37.670072],
+          [126.773359, 37.659477],
+          [126.77762, 37.652206],
+          [126.78787, 37.643114],
+          [126.811024, 37.631626],
+          [126.83265, 37.634592],
+          [126.843041, 37.653324],
+          [126.872642, 37.650658],
+          [126.895558, 37.653083],
+          [126.913951, 37.648048],
+          [126.918821, 37.636763],
+          [126.921008, 37.619001],
+          [126.929887, 37.610469],
+          [126.935756, 37.600927],
+          [126.943736, 37.589066],
+          [126.950291, 37.582299],
+          [126.957748, 37.574571],
+          [126.97353, 37.575762],
+          [126.985443, 37.576477],
+          [126.991806, 37.571607],
+          [126.99191, 37.566295],
+          [126.99428, 37.561243],
+          [127.005602, 37.559052],
+          [127.010655, 37.55434],
+          [127.015872, 37.548034],
+          [127.017965, 37.540685],
+          [127.028461, 37.527072],
+          [127.020114, 37.516334],
+          [127.01122, 37.512759],
+          [127.004943, 37.50481],
+          [127.01408, 37.493415],
+          [127.016189, 37.485013],
+          [127.034631, 37.484147],
+          [127.046769, 37.486947],
+          [127.055381, 37.490858],
+          [127.063642, 37.494612],
+          [127.070594, 37.496663],
+          [127.079532, 37.493514],
+          [127.08439, 37.483681],
+          [127.10188, 37.487371],
+          [127.118234, 37.492522],
+          [127.12454, 37.495918],
+          [127.128111, 37.502162]
+        ];
+      }
+      return positions;
+    }
+
+    function splitLineIntoRenderableSegments(line) {
+      const positions = Array.isArray(line && line.positions) ? line.positions : [];
+      if (positions.length < 2) return [];
+      const MAX_CONTINUOUS_SEGMENT_METERS = 20000;
+      const segments = [];
+      let current = [positions[0]];
+      for (let i = 1; i < positions.length; i += 1) {
+        const prev = positions[i - 1];
+        const next = positions[i];
+        const jump = distanceBetweenLinePoints(prev, next);
+        if (jump > MAX_CONTINUOUS_SEGMENT_METERS) {
+          if (current.length >= 2) segments.push({ ...line, positions: current });
+          current = [next];
+        } else {
+          current.push(next);
+        }
+      }
+      if (current.length >= 2) segments.push({ ...line, positions: current });
+      return segments;
+    }
+
+    function buildSubwayLineGeometries(lines = []) {
+      return (Array.isArray(lines) ? lines : [])
+        .map((line) => {
+          const rawPositions = sanitizeLinePositions(line.positions || []);
+          const positions = repairKnownLinePositions(line.name || '지하철', rawPositions);
+          return {
+            name: line.name || '지하철',
+            color: line.color || '#4B8BFF',
+            positions: sanitizeLinePositions(positions),
+          };
+        })
+        .filter((line) => line.positions.length >= 2);
+    }
+
+    function toLocalMeters(lon, lat, refLat) {
+      const lonScale = Math.cos(Cesium.Math.toRadians(refLat || lat || 37)) * 111320;
+      return { x: lon * lonScale, y: lat * 111320, lonScale };
+    }
+
+    function fromLocalMeters(x, y, refLat) {
+      const lonScale = Math.cos(Cesium.Math.toRadians(refLat || 37)) * 111320;
+      return { lon: x / lonScale, lat: y / 111320 };
+    }
+
+    function projectPointToSegmentMeters(point, a, b) {
+      const vx = b.x - a.x;
+      const vy = b.y - a.y;
+      const len2 = vx * vx + vy * vy;
+      if (len2 <= 0.000001) {
+        const dx = point.x - a.x;
+        const dy = point.y - a.y;
+        return { x: a.x, y: a.y, t: 0, dist: Math.sqrt(dx * dx + dy * dy) };
+      }
+      const rawT = ((point.x - a.x) * vx + (point.y - a.y) * vy) / len2;
+      const t = Math.max(0, Math.min(1, rawT));
+      const x = a.x + vx * t;
+      const y = a.y + vy * t;
+      const dx = point.x - x;
+      const dy = point.y - y;
+      return { x, y, t, dist: Math.sqrt(dx * dx + dy * dy) };
+    }
+
+    function findClosestProjectionOnLine(station, geom) {
+      if (!geom || !Array.isArray(geom.positions) || geom.positions.length < 2) return null;
+      const refLat = Number(station.lat) || 37;
+      const target = toLocalMeters(Number(station.lon), Number(station.lat), refLat);
+      let best = null;
+      for (let i = 0; i < geom.positions.length - 1; i++) {
+        const aRaw = geom.positions[i];
+        const bRaw = geom.positions[i + 1];
+        const a = toLocalMeters(aRaw[0], aRaw[1], refLat);
+        const b = toLocalMeters(bRaw[0], bRaw[1], refLat);
+        const projected = projectPointToSegmentMeters(target, a, b);
+        if (!best || projected.dist < best.dist) {
+          const lonLat = fromLocalMeters(projected.x, projected.y, refLat);
+          best = {
+            lon: lonLat.lon,
+            lat: lonLat.lat,
+            dist: projected.dist,
+            t: projected.t,
+            segmentIndex: i,
+            line: geom,
+          };
+        }
+      }
+      return best;
+    }
+
+    function findClosestProjection(station, lineGeometries) {
+      let best = null;
+      (Array.isArray(lineGeometries) ? lineGeometries : []).forEach((geom) => {
+        const projected = findClosestProjectionOnLine(station, geom);
+        if (projected && (!best || projected.dist < best.dist)) best = projected;
+      });
+      return best;
+    }
+
+    function getStationCandidateLines(station, lineGeometries, stationLineOverride = null) {
+      const stationLines = stationLineOverride ? [stationLineOverride] : (Array.isArray(station.lines) ? station.lines : []);
+      const candidates = (lineGeometries || []).filter((geom) => stationLines.some((line) => lineGeometryMatchesStationLine(geom, line)));
+      return candidates.length > 0 ? candidates : (lineGeometries || []);
+    }
+
+    function segmentIntersectionMeters(a, b, c, d) {
+      const rX = b.x - a.x;
+      const rY = b.y - a.y;
+      const sX = d.x - c.x;
+      const sY = d.y - c.y;
+      const denom = rX * sY - rY * sX;
+      if (Math.abs(denom) < 0.000001) return null;
+      const qpx = c.x - a.x;
+      const qpy = c.y - a.y;
+      const t = (qpx * sY - qpy * sX) / denom;
+      const u = (qpx * rY - qpy * rX) / denom;
+      const eps = 0.000001;
+      if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null;
+      return { x: a.x + t * rX, y: a.y + t * rY, t, u };
+    }
+
+    function findBestTransferIntersection(station, lineGroups) {
+      if (!Array.isArray(lineGroups) || lineGroups.length < 2) return null;
+      const refLat = Number(station.lat) || 37;
+      const target = toLocalMeters(Number(station.lon), Number(station.lat), refLat);
+      let best = null;
+      for (let groupAIndex = 0; groupAIndex < lineGroups.length - 1; groupAIndex++) {
+        for (let groupBIndex = groupAIndex + 1; groupBIndex < lineGroups.length; groupBIndex++) {
+          const groupA = lineGroups[groupAIndex] || [];
+          const groupB = lineGroups[groupBIndex] || [];
+          groupA.forEach((lineA) => {
+            groupB.forEach((lineB) => {
+              if (!lineA || !lineB || lineA === lineB) return;
+              for (let i = 0; i < lineA.positions.length - 1; i++) {
+                const a = toLocalMeters(lineA.positions[i][0], lineA.positions[i][1], refLat);
+                const b = toLocalMeters(lineA.positions[i + 1][0], lineA.positions[i + 1][1], refLat);
+                for (let j = 0; j < lineB.positions.length - 1; j++) {
+                  const c = toLocalMeters(lineB.positions[j][0], lineB.positions[j][1], refLat);
+                  const d = toLocalMeters(lineB.positions[j + 1][0], lineB.positions[j + 1][1], refLat);
+                  const intersection = segmentIntersectionMeters(a, b, c, d);
+                  if (!intersection) continue;
+                  const dx = target.x - intersection.x;
+                  const dy = target.y - intersection.y;
+                  const dist = Math.sqrt(dx * dx + dy * dy);
+                  if (!best || dist < best.dist) {
+                    const lonLat = fromLocalMeters(intersection.x, intersection.y, refLat);
+                    best = { lon: lonLat.lon, lat: lonLat.lat, dist };
+                  }
+                }
+              }
+            });
+          });
+        }
+      }
+      return best;
+    }
+
+    function forceLineGeometryThroughPoint(projection, point) {
+      // 노선 선형은 원본 정적 데이터 그대로 유지한다.
+      // 이전 방식처럼 역 스냅을 위해 polyline 좌표를 강제로 삽입/이동하면,
+      // 근접 노선을 잘못 후보로 잡았을 때 하늘색 노선이 2갈래로 갈라져 보이는 부작용이 발생한다.
+      return;
+    }
+
+    function snapMergedStationsToSubwayLines(mergedStations, lineGeometries) {
+      const MAX_STATION_SNAP_METERS = 1300;
+      const MAX_TRANSFER_FIX_METERS = 1800;
+      (Array.isArray(mergedStations) ? mergedStations : []).forEach((station) => {
+        const stationLines = (Array.isArray(station.lines) ? station.lines : [])
+          .filter((line) => line && (line.line || line.color));
+
+        if (stationLines.length >= 2) {
+          const lineGroups = stationLines.map((lineInfo) => getStationCandidateLines(station, lineGeometries, lineInfo));
+          const intersection = findBestTransferIntersection(station, lineGroups);
+          if (intersection && intersection.dist <= MAX_TRANSFER_FIX_METERS) {
+            station.lon = intersection.lon;
+            station.lat = intersection.lat;
+            lineGroups.forEach((group) => {
+              const best = findClosestProjection(station, group);
+              if (best && best.dist <= MAX_STATION_SNAP_METERS) forceLineGeometryThroughPoint(best, station);
+            });
+            return;
+          }
+
+          const closestByLine = stationLines
+            .map((lineInfo) => findClosestProjection(station, getStationCandidateLines(station, lineGeometries, lineInfo)))
+            .filter((projection) => projection && projection.dist <= MAX_TRANSFER_FIX_METERS);
+
+          if (closestByLine.length >= 2) {
+            const averaged = closestByLine.reduce((acc, item) => {
+              acc.lon += item.lon;
+              acc.lat += item.lat;
+              return acc;
+            }, { lon: 0, lat: 0 });
+            averaged.lon /= closestByLine.length;
+            averaged.lat /= closestByLine.length;
+            if (getStationDistanceMeters(station, averaged) <= MAX_TRANSFER_FIX_METERS) {
+              station.lon = averaged.lon;
+              station.lat = averaged.lat;
+              closestByLine.forEach((projection) => forceLineGeometryThroughPoint(projection, station));
+              return;
+            }
+          }
+        }
+
+        const candidates = getStationCandidateLines(station, lineGeometries);
+        const bestProjection = findClosestProjection(station, candidates);
+        if (bestProjection && bestProjection.dist <= MAX_STATION_SNAP_METERS) {
+          station.lon = bestProjection.lon;
+          station.lat = bestProjection.lat;
+        }
+      });
+    }
+
+    function normalizeLineIdentity(line = {}) {
+      const color = String(line.color || '').trim().toLowerCase().replace(/\s+/g, '');
+      const name = normalizeLineName(line.line || line.name || '').trim();
+      return color || normalizeRailMatchKey(name) || name;
+    }
+
+    function pushUniqueStationLine(lines, lineInfo) {
+      if (!lineInfo) return false;
+      const color = lineInfo.color || '#4B8BFF';
+      const lineName = normalizeLineName(lineInfo.line || lineInfo.name || '');
+      if (!color || color === '#ffffff' || color === '#4B8BFF') return false;
+      const next = { line: lineName || lineInfo.name || '', color };
+      const nextKey = normalizeLineIdentity(next);
+      const exists = (Array.isArray(lines) ? lines : []).some((item) => {
+        const itemKey = normalizeLineIdentity(item);
+        if (nextKey && itemKey && nextKey === itemKey) return true;
+        return normalizeColorKey(item.color) === normalizeColorKey(next.color) || railNameLooksSame(item.line, next.line);
+      });
+      if (exists) return false;
+      lines.push(next);
+      return true;
+    }
+
+    function enrichTransferStationLinesByGeometry(mergedStations, lineGeometries) {
+      if (!Array.isArray(mergedStations) || !Array.isArray(lineGeometries)) return;
+      const MAX_TRANSFER_LINE_NEAR_METERS = 95;
+      mergedStations.forEach((station) => {
+        if (!station || !Number.isFinite(Number(station.lon)) || !Number.isFinite(Number(station.lat))) return;
+        station.lines = Array.isArray(station.lines) ? station.lines : [];
+        const nearLines = [];
+        lineGeometries.forEach((geom) => {
+          if (!geom || !Array.isArray(geom.positions) || geom.positions.length < 2) return;
+          const projected = findClosestProjectionOnLine(station, geom);
+          if (!projected || projected.dist > MAX_TRANSFER_LINE_NEAR_METERS) return;
+          const lineInfo = { line: geom.name || '', color: geom.color || resolveColor({ name: geom.name || '' }) };
+          const id = normalizeLineIdentity(lineInfo);
+          if (!id) return;
+          const existingNear = nearLines.find((item) => item.id === id || normalizeColorKey(item.color) === normalizeColorKey(lineInfo.color));
+          if (existingNear) {
+            if (projected.dist < existingNear.dist) existingNear.dist = projected.dist;
+            return;
+          }
+          nearLines.push({ id, line: lineInfo.line, color: lineInfo.color, dist: projected.dist });
+        });
+
+        // 이미 데이터상 환승역으로 확인된 경우에만 주변 노선으로 누락 색상을 보강한다.
+        // 단일역 주변을 우연히 지나는 다른 선로를 환승으로 오인하면 숙대입구역처럼
+        // 점/라벨이 여러 개처럼 보이고 노선까지 분기된 것처럼 보이는 문제가 생긴다.
+        const knownCount = station.lines.length;
+        const shouldEnrich = knownCount >= 2;
+        if (!shouldEnrich) return;
+        nearLines
+          .sort((a, b) => a.dist - b.dist)
+          .forEach((item) => pushUniqueStationLine(station.lines, item));
+      });
+    }
+
+
+    function normalizeStationLineList(lines) {
+      const result = [];
+      (Array.isArray(lines) ? lines : []).forEach((line) => pushUniqueStationLine(result, line));
+      return result;
+    }
+
+    function stationLineSetsOverlap(aLines = [], bLines = []) {
+      const a = normalizeStationLineList(aLines);
+      const b = normalizeStationLineList(bLines);
+      if (a.length === 0 || b.length === 0) return true;
+      return a.some((left) => b.some((right) => {
+        const leftKey = normalizeLineIdentity(left);
+        const rightKey = normalizeLineIdentity(right);
+        if (leftKey && rightKey && leftKey === rightKey) return true;
+        if (normalizeColorKey(left.color) && normalizeColorKey(left.color) === normalizeColorKey(right.color)) return true;
+        return railNameLooksSame(left.line, right.line);
+      }));
+    }
+
+    function mergeStationMarker(target, source) {
+      const targetWeight = Number(target._mergeWeight || 1);
+      const sourceWeight = Number(source._mergeWeight || 1);
+      const totalWeight = targetWeight + sourceWeight;
+      target.lon = ((Number(target.lon) * targetWeight) + (Number(source.lon) * sourceWeight)) / totalWeight;
+      target.lat = ((Number(target.lat) * targetWeight) + (Number(source.lat) * sourceWeight)) / totalWeight;
+      target._mergeWeight = totalWeight;
+      (Array.isArray(source.lines) ? source.lines : []).forEach((line) => pushUniqueStationLine(target.lines, line));
+      target.lines = normalizeStationLineList(target.lines);
+      target.displayName = normalizeStationDisplayName(target.name || source.name || target.displayName);
+    }
+
+    function consolidateDuplicateStationMarkers(mergedStations, lineGeometries) {
+      if (!Array.isArray(mergedStations)) return;
+      // OSM/Overpass는 일반역도 승강장·정차 위치·출입구가 각각 들어와 같은 역명이 2개 점으로 보일 수 있다.
+      // 같은 역명 + 가까운 위치 + 같은 노선 계열이면 하나의 역 마커로 합쳐서 단일 노선 일반역은 항상 점 1개만 남긴다.
+      const SAME_LINE_DUPLICATE_RADIUS_METERS = 1600;
+      const TRANSFER_DUPLICATE_RADIUS_METERS = 900;
+      for (let i = 0; i < mergedStations.length; i++) {
+        const base = mergedStations[i];
+        if (!base) continue;
+        base.lines = normalizeStationLineList(base.lines);
+        base._mergeWeight = base._mergeWeight || 1;
+        for (let j = mergedStations.length - 1; j > i; j--) {
+          const other = mergedStations[j];
+          if (!other || base.key !== other.key) continue;
+          other.lines = normalizeStationLineList(other.lines);
+          const dist = getStationDistanceMeters(base, other);
+          const sameLineLike = stationLineSetsOverlap(base.lines, other.lines);
+          const radius = sameLineLike ? SAME_LINE_DUPLICATE_RADIUS_METERS : TRANSFER_DUPLICATE_RADIUS_METERS;
+          if (dist > radius) continue;
+          mergeStationMarker(base, other);
+          mergedStations.splice(j, 1);
+        }
+      }
+
+      // 최종 안전장치: 이름 키가 같거나 표시명이 같은 역이 매우 가까우면 한 번 더 병합한다.
+      for (let i = mergedStations.length - 1; i >= 0; i--) {
+        const current = mergedStations[i];
+        if (!current) continue;
+        for (let j = 0; j < i; j++) {
+          const target = mergedStations[j];
+          if (!target) continue;
+          const sameName = current.key === target.key || getStationLabelKey(current.displayName || current.name) === getStationLabelKey(target.displayName || target.name);
+          if (!sameName) continue;
+          if (getStationDistanceMeters(current, target) > 120) continue;
+          mergeStationMarker(target, current);
+          mergedStations.splice(i, 1);
+          break;
+        }
+      }
+
+      mergedStations.forEach((station) => {
+        station.lines = normalizeStationLineList(station.lines);
+        delete station._mergeWeight;
+      });
+
+      // 합친 좌표가 선형 사이의 중간에 있을 수 있으므로 마지막으로 한 번 더 역 좌표만 노선 위로 스냅한다.
+      // 노선 polyline 자체는 건드리지 않는다.
+      snapMergedStationsToSubwayLines(mergedStations, lineGeometries);
+    }
+
+    function findClosestLineEndpoint(station, geom) {
+      if (!geom || !Array.isArray(geom.positions) || geom.positions.length < 1) return null;
+      const first = geom.positions[0];
+      const last = geom.positions[geom.positions.length - 1];
+      const candidates = [];
+      if (first) candidates.push({ lon: first[0], lat: first[1] });
+      if (last && (!first || last[0] !== first[0] || last[1] !== first[1])) candidates.push({ lon: last[0], lat: last[1] });
+      let best = null;
+      candidates.forEach((point) => {
+        const dist = getStationDistanceMeters(station, point);
+        if (!best || dist < best.dist) best = { ...point, dist };
+      });
+      return best;
+    }
+
+    function buildShortStationConnectors(mergedStations, lineGeometries) {
+      const connectors = [];
+      const seen = new Set();
+      const MIN_CONNECT_METERS = 35;
+      const MAX_CONNECT_METERS = 360;
+      (Array.isArray(mergedStations) ? mergedStations : []).forEach((station) => {
+        const stationLines = normalizeStationLineList(station.lines || []);
+        if (stationLines.length < 2) return;
+        stationLines.forEach((lineInfo) => {
+          const candidates = getStationCandidateLines(station, lineGeometries, lineInfo);
+          let best = null;
+          candidates.forEach((geom) => {
+            if (!lineGeometryMatchesStationLine(geom, lineInfo)) return;
+            const endpoint = findClosestLineEndpoint(station, geom);
+            if (endpoint && (!best || endpoint.dist < best.dist)) best = { ...endpoint, line: geom };
+          });
+          if (!best || best.dist < MIN_CONNECT_METERS || best.dist > MAX_CONNECT_METERS) return;
+          const key = [station.key || station.name, normalizeLineIdentity(lineInfo), best.lon.toFixed(5), best.lat.toFixed(5)].join('|');
+          if (seen.has(key)) return;
+          seen.add(key);
+          connectors.push({
+            name: lineInfo.line || (best.line && best.line.name) || '지하철',
+            color: lineInfo.color || (best.line && best.line.color) || '#4B8BFF',
+            positions: [[Number(station.lon), Number(station.lat)], [best.lon, best.lat]],
+          });
+        });
+      });
+      return connectors;
+    }
+
     function addEntities(dataset) {
       if (!dataset) return;
       // 새 데이터 로드 시 canvas 캐시 초기화
@@ -905,18 +1457,7 @@
       try {
         dataSource.entities.removeAll();
 
-        (dataset.lines || []).forEach((line) => {
-          if (!Array.isArray(line.positions) || line.positions.length < 2) return;
-          dataSource.entities.add({
-            polyline: {
-              positions: Cesium.Cartesian3.fromDegreesArray(line.positions.flat()),
-              width: 5.0,
-              material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.95),
-              clampToGround: true,
-            },
-            properties: { kind: 'subway-line', name: line.name || '지하철' },
-          });
-        });
+        const lineGeometries = buildSubwayLineGeometries(dataset.lines || []);
 
         // ── 역 병합: 이름 + 근접도 기준 ──────────────────────────────
         const mergedStations = [];
@@ -936,10 +1477,7 @@
             existing.lat = (existing.lat + station.lat) / 2;
             existing.displayName = normalizeStationDisplayName(existing.name);
             if (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF') {
-              const dup = existing.lines.some(
-                l => l.line === station.line || l.color.toLowerCase() === station.color.toLowerCase()
-              );
-              if (!dup) existing.lines.push({ line: station.line, color: station.color });
+              pushUniqueStationLine(existing.lines, { line: station.line, color: station.color });
             }
           } else {
             const firstLines = (station.line && station.color && station.color !== '#ffffff' && station.color !== '#4B8BFF')
@@ -972,15 +1510,38 @@
           for (let j = 0; j < i; j++) {
             const a = mergedStations[j], b = mergedStations[i];
             if (a.key === b.key && getStationDistanceMeters(a, b) <= 400) {
-              b.lines.forEach((l) => {
-                const dup = a.lines.some((al) => al.color.toLowerCase() === l.color.toLowerCase());
-                if (!dup) a.lines.push(l);
-              });
+              b.lines.forEach((l) => pushUniqueStationLine(a.lines, l));
               mergedStations.splice(i, 1);
               break;
             }
           }
         }
+
+        // 역 마커를 노선 선형에 스냅한다.
+        // 환승역은 가능한 경우 노선 교차점으로, 교차점이 없는 정적 데이터는 가장 가까운 각 노선 지점을 하나로 맞춰
+        // 마커가 노선 밖으로 밀려 보이는 현상을 막는다.
+        snapMergedStationsToSubwayLines(mergedStations, lineGeometries);
+        enrichTransferStationLinesByGeometry(mergedStations, lineGeometries);
+        consolidateDuplicateStationMarkers(mergedStations, lineGeometries);
+
+        const renderLineSegments = [];
+        lineGeometries.forEach((line) => {
+          splitLineIntoRenderableSegments(line).forEach((segment) => renderLineSegments.push(segment));
+        });
+        buildShortStationConnectors(mergedStations, lineGeometries).forEach((segment) => renderLineSegments.push(segment));
+
+        renderLineSegments.forEach((line) => {
+          if (!Array.isArray(line.positions) || line.positions.length < 2) return;
+          dataSource.entities.add({
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray(line.positions.flat()),
+              width: 5.0,
+              material: Cesium.Color.fromCssColorString(line.color || '#4B8BFF').withAlpha(0.95),
+              clampToGround: true,
+            },
+            properties: { kind: 'subway-line', name: line.name || '지하철' },
+          });
+        });
 
         if (window.WorldSearch && typeof window.WorldSearch.registerSubwayStations === 'function') {
           window.WorldSearch.registerSubwayStations(mergedStations.map((s) => ({
@@ -1007,9 +1568,18 @@
           : new Cesium.NearFarScalar(6000, 1.1, 800000, 0.5);
         const _billboardTranslucency = new Cesium.NearFarScalar(10000, 1.0, 1200000, 0.0);
         const _labelOffset = new Cesium.Cartesian2(0, -26);
-        const _billboardOffset = new Cesium.Cartesian2(0, -10);
+        const _billboardOffset = new Cesium.Cartesian2(0, 0);
 
+        function pickPrimaryStationLine(lines) {
+          const candidates = Array.isArray(lines) && lines.length > 0 ? lines : [{ line: '', color: '#4B8BFF' }];
+          return candidates.find((line) => line && line.color && line.color !== '#ffffff' && line.color !== '#4B8BFF') || candidates[0] || { line: '', color: '#4B8BFF' };
+        }
+
+        const renderedStationKeys = new Set();
         mergedStations.forEach((station) => {
+          const renderKey = getStationRenderKey(station);
+          if (renderKey && renderedStationKeys.has(renderKey)) return;
+          if (renderKey) renderedStationKeys.add(renderKey);
           const seenRenderColors = new Set();
           const dedupedLines = (station.lines.length > 0 ? station.lines : [{ line: '', color: '#4B8BFF' }])
             .filter((l) => {
@@ -1019,7 +1589,13 @@
               return true;
             });
 
-          const dotsCanvas = makeLineDotsCanvasCached(dedupedLines);
+          // 일반역은 1개 색상 점만 표시하고, 환승역은 해당되는 모든 노선 색상 점을 함께 표시한다.
+          // 기존 중복 표시 문제는 위의 dedupe 단계에서 같은 노선/색상 반복을 제거해 방지한다.
+          const markerLine = pickPrimaryStationLine(dedupedLines);
+          const markerLines = dedupedLines.length > 1
+            ? dedupedLines
+            : [{ line: markerLine.line || '', color: markerLine.color || '#4B8BFF' }];
+          const dotsCanvas = makeLineDotsCanvasCached(markerLines);
           // 모바일에서 새로고침 직후 지하철역 라벨/아이콘이 화면 좌표처럼 따라붙는 현상 방지.
           // 지형 클램프 대신 실제 WGS84 좌표에 고정해 카메라 이동 중에도 역 위치가 지도 좌표에 묶이도록 한다.
           const stationPosition = Cesium.Cartesian3.fromDegrees(station.lon, station.lat, 35);
@@ -1048,7 +1624,7 @@
             position: stationPosition,
             billboard: {
               image: dotsCanvas,
-              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              verticalOrigin: Cesium.VerticalOrigin.CENTER,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
               pixelOffset: _billboardOffset,
               heightReference: Cesium.HeightReference.NONE,
@@ -1333,15 +1909,19 @@
           const lat = Number(station.lat);
           const lon = Number(station.lon);
           if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
-          const key = getStationLabelKey(name) + ':' + lat.toFixed(5) + ':' + lon.toFixed(5);
+          const normalizedLine = normalizeLineName(station.line || '');
+          const resolvedColor = station.color || resolveColor({ ref: station.line || '', name: station.line || '' });
+          // 환승역은 같은 좌표에 노선별 station row가 여러 개 들어오므로 line/color까지 키에 포함한다.
+          // 여기서 이름+좌표만으로 제거하면 이후 렌더링 단계에서 환승 색상 점을 복구할 수 없다.
+          const key = [getStationLabelKey(name), lat.toFixed(5), lon.toFixed(5), normalizeRailMatchKey(normalizedLine), normalizeColorKey(resolvedColor)].join(':');
           if (stationSeen.has(key)) return;
           stationSeen.add(key);
           merged.stations.push({
             name,
             lat,
             lon,
-            line: normalizeLineName(station.line || ''),
-            color: station.color || resolveColor({ ref: station.line || '', name: station.line || '' }),
+            line: normalizedLine,
+            color: resolvedColor,
             aliases: Array.isArray(station.aliases) ? station.aliases.slice() : [],
           });
         });
@@ -1353,11 +1933,7 @@
       const fallbackStations = Array.isArray(window.KR_SUBWAY_STATIONS) ? window.KR_SUBWAY_STATIONS : [];
       const staticOverlay = window.KR_SUBWAY_STATIC_OVERLAY || {};
       const regionalOverlay = window.KR_SUBWAY_REGIONAL_STATIC_OVERLAY || {};
-      const globalData = window.KR_SUBWAY_OVERLAY_DATA || null;
-      const cached = parseCached();
-      const cachedData = (globalData && isUsableSubwayDataset(globalData)) ? globalData : (cached && cached.data ? cached.data : null);
       return mergeSubwayDatasets([
-        cachedData,
         {
           lines: Array.isArray(staticOverlay.lines) ? staticOverlay.lines : [],
           stations: Array.isArray(staticOverlay.stations) ? staticOverlay.stations : [],
@@ -1426,42 +2002,21 @@ out geom qt;`;
     async function load() {
       if (loadPromise) return loadPromise;
       loadPromise = (async () => {
-        // ① 캐시/폴백 데이터를 먼저 즉시 표시해 오버레이 공백 상태를 방지
-        let cached = null;
+        // ① 지하철 오버레이는 정적 번들 데이터만 즉시 표시한다.
+        // 캐시/Overpass 원시 데이터는 노선 선형을 흔들 수 있으므로 이 렌더링 경로에서는 사용하지 않는다.
         try {
-          cached = parseCached();
-          if (cached && ((cached.data || {}).lines || []).length > 0) {
-            addEntities(cached.data);
-            window.KR_SUBWAY_OVERLAY_DATA = cached.data;
-            // 모바일에서 Overpass 갱신이 끝날 때까지 일반 지도 오버레이가 비어 보이지 않도록
-            // 캐시 데이터 표시가 끝나는 즉시 로드 완료 상태로 전환한다.
+          const fallbackDataset = getFallbackDataset();
+          if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
+            addEntities(fallbackDataset);
+            window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
             hasLoadedOnce = true;
-            if (!cached.expired) {
-              return;
-            }
-          } else {
-            const fallbackDataset = getFallbackDataset();
-            if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
-              addEntities(fallbackDataset);
-              window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
-              // 폴백은 5개 역짜리가 아니라 수도권+부산/대구/대전/광주 보정 데이터까지 병합된 데이터다.
-              // 이 데이터를 즉시 표시하고, Overpass는 백그라운드 갱신으로만 사용한다.
-              hasLoadedOnce = true;
-            }
           }
         } catch (e) {
-          console.warn('subway cache load failed:', e);
-          try {
-            const fallbackDataset = getFallbackDataset();
-            if (((fallbackDataset.lines || []).length > 0) || ((fallbackDataset.stations || []).length > 0)) {
-              addEntities(fallbackDataset);
-              window.KR_SUBWAY_OVERLAY_DATA = fallbackDataset;
-              hasLoadedOnce = true;
-            }
-          } catch (fallbackError) {
-            console.warn('subway fallback load failed:', fallbackError);
-          }
+          console.warn('subway static load failed:', e);
         }
+
+        // 정적 데이터 표시로 종료한다. 네트워크 갱신은 시각적 중복/분기 이슈 방지를 위해 비활성화한다.
+        return;
 
         // ② Overpass 갱신 — 전국을 한 번에 조회하면 일부 서버가 수도권만 반환/타임아웃되는 경우가 있어
         // 수도권·부산·대구·대전·광주 bbox로 분리해서 병합한다.
@@ -1473,7 +2028,11 @@ out geom qt;`;
         try {
           const fallbackDataset = getFallbackDataset();
           const regionalDatasets = await fetchRegionalOverpassDatasets();
-          const transformed = mergeSubwayDatasets([fallbackDataset, ...regionalDatasets]);
+          // Overpass는 역 누락 보완용으로만 사용한다. 원시 선로 way를 그대로 병합하면
+          // 같은 노선의 상/하행 track 또는 relation 세그먼트가 겹쳐 2갈래 선처럼 보인다.
+          // 노선 선형은 번들된 정적 데이터만 유지해 렌더링을 안정화한다.
+          const overpassStationsOnly = regionalDatasets.map((dataset) => ({ lines: [], stations: dataset.stations || [] }));
+          const transformed = mergeSubwayDatasets([fallbackDataset, ...overpassStationsOnly]);
           if (((transformed.lines || []).length > 0) || ((transformed.stations || []).length > 0)) {
             addEntities(transformed);
             if (isUsableSubwayDataset(transformed)) storeCache(transformed);
