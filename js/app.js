@@ -2,7 +2,6 @@
   'use strict';
 
   const MAX_VIEW_LATITUDE = 84.8;
-  const FAVORITES_KEY = 'worldmap:favorites:v1';
   const DEFAULT_STYLE = 'latestSatellite';
   const LATEST_SATELLITE_CACHE_KEY = 'worldmap:latest-satellite-date:v2';
   const LATEST_SATELLITE_MAX_LOOKBACK_DAYS = 30;
@@ -100,7 +99,6 @@
     wirePanelExclusivity();
     wireStylePicker(viewer, styleManager, sharedState);
     wireMiniMap(viewer);
-    wireFavorites(viewer, sharedState);
     wireMobileGestures(viewer);
 
     scene.requestRender();
@@ -2496,7 +2494,7 @@ out geom qt;`;
           closeMetadataCard();
           return;
         }
-        // 모바일에서 지도 스타일/즐겨찾기 패널이 열린 상태로 위성 정보 버튼을 누르면
+        // 모바일에서 다른 패널이 열린 상태로 위성 정보 버튼을 누르면
         // 기존 패널을 먼저 닫고 위성 정보 창만 열리게 한다.
         if (typeof closeOtherPanels === 'function') {
           closeOtherPanels(null);
@@ -3090,7 +3088,7 @@ out geom qt;`;
     document.addEventListener('click', (event) => {
       const target = event.target;
       const inPanel = target.closest('.tool-panel');
-      const isToggle = target.closest('#style-toggle-btn, #favorites-toggle-btn');
+      const isToggle = target.closest('#style-toggle-btn');
       if (!inPanel && !isToggle) closeOtherPanels(null);
     });
   }
@@ -3308,248 +3306,6 @@ out geom qt;`;
     window.addEventListener('resize', draw);
     draw();
   }
-
-  function wireFavorites(viewer, sharedState) {
-    const btn = document.getElementById('favorites-toggle-btn');
-    const panel = document.getElementById('favorites-panel');
-    const list = document.getElementById('favorites-list');
-    const addCurrentBtn = document.getElementById('fav-add-current');
-    const addManualBtn = document.getElementById('fav-add-manual');
-    const nameInput = document.getElementById('fav-name');
-    const coordsInput = document.getElementById('fav-coords');
-    const postalInput = document.getElementById('fav-postal');
-    const editIdInput = document.getElementById('fav-edit-id');
-
-    let favorites = loadFavorites();
-
-    function togglePanel() {
-      const willOpen = !panel.classList.contains('open');
-      closeOtherPanels(willOpen ? panel.id : null);
-      panel.classList.toggle('open', willOpen);
-      if (willOpen) {
-        requestAnimationFrame(() => positionPanelNearButton(panel, btn));
-      }
-    }
-    btn.addEventListener('click', (event) => { event.stopPropagation(); togglePanel(); });
-    panel.addEventListener('click', (event) => event.stopPropagation());
-    window.addEventListener('resize', () => {
-      if (panel.classList.contains('open')) positionPanelNearButton(panel, btn);
-    });
-
-    function saveFavorites() { localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites)); }
-    function resetForm() {
-      editIdInput.value = '';
-      nameInput.value = '';
-      coordsInput.value = '';
-      postalInput.value = '';
-    }
-
-    function renderFavorites() {
-      if (!favorites.length) {
-        list.innerHTML = '<div class="fav-empty">저장된 위치가 없습니다.</div>';
-        return;
-      }
-      list.innerHTML = '';
-      favorites.forEach(item => {
-        const el = document.createElement('div');
-        el.className = 'fav-item';
-        el.innerHTML = `
-          <div class="fav-text">
-            <div class="fav-name">${escapeHtml(item.name)}</div>
-            <div class="fav-sub">${escapeHtml(item.sourceLabel || `${item.lat.toFixed(4)}, ${item.lon.toFixed(4)}`)}</div>
-          </div>
-          <div class="fav-actions">
-            <button type="button" data-go="${item.id}">이동</button>
-            <button type="button" data-edit="${item.id}">수정</button>
-            <button type="button" data-del="${item.id}">삭제</button>
-          </div>
-        `;
-        list.appendChild(el);
-      });
-
-      list.querySelectorAll('[data-go]').forEach(btn => btn.addEventListener('click', () => {
-        const item = favorites.find(f => f.id === btn.dataset.go);
-        if (!item) return;
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt || 85000),
-          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-          duration: 1.4,
-        });
-      }));
-      list.querySelectorAll('[data-edit]').forEach(btn => btn.addEventListener('click', () => {
-        const item = favorites.find(f => f.id === btn.dataset.edit);
-        if (!item) return;
-        editIdInput.value = item.id;
-        nameInput.value = item.name;
-        coordsInput.value = item.lat.toFixed(6) + ', ' + item.lon.toFixed(6);
-        postalInput.value = item.postalCode || '';
-      }));
-      list.querySelectorAll('[data-del]').forEach(btn => btn.addEventListener('click', () => {
-        favorites = favorites.filter(f => f.id !== btn.dataset.del);
-        saveFavorites();
-        renderFavorites();
-        if (editIdInput.value === btn.dataset.del) resetForm();
-      }));
-    }
-
-    function makeUniqueFavoriteName(baseName, ignoreId = '') {
-      const fallback = String(baseName || '').trim() || '선택 위치';
-      const normalizedBase = fallback.trim().toLowerCase();
-      const existingNames = new Set(
-        favorites
-          .filter(item => !ignoreId || item.id !== ignoreId)
-          .map(item => String(item.name || '').trim().toLowerCase())
-      );
-
-      if (!existingNames.has(normalizedBase)) {
-        return fallback;
-      }
-
-      let suffix = 2;
-      while (existingNames.has((fallback + ' ' + suffix).trim().toLowerCase())) {
-        suffix += 1;
-      }
-      return `${fallback} ${suffix}`;
-    }
-
-    function buildAutoFavoriteName(place, lat, lon) {
-      const country = String(place?.country || '').trim();
-      const city = String(place?.city || '').trim();
-      const label = String(place?.label || '').trim();
-      const base = (country && city)
-        ? `${country} - ${city}`
-        : (country || city || label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`);
-      return makeUniqueFavoriteName(base);
-    }
-
-    function upsertFavorite(payload) {
-      const nextPayload = { ...payload };
-      nextPayload.name = String(nextPayload.name || '').trim() || '선택 위치';
-
-      if (editIdInput.value) {
-        nextPayload.name = makeUniqueFavoriteName(nextPayload.name, editIdInput.value);
-        favorites = favorites.map(item => item.id === editIdInput.value ? { ...item, ...nextPayload, id: item.id } : item);
-      } else {
-        nextPayload.name = makeUniqueFavoriteName(nextPayload.name);
-        const duplicate = favorites.find(item => Math.abs(item.lat - nextPayload.lat) < 0.00001 && Math.abs(item.lon - nextPayload.lon) < 0.00001);
-        if (!duplicate) {
-          favorites.unshift({ id: 'fav_' + Date.now(), ...nextPayload });
-        }
-      }
-      saveFavorites();
-      renderFavorites();
-      resetForm();
-    }
-
-    async function saveFavoriteAtLocation(lat, lon, options = {}) {
-      const place = options.place || await window.WorldSearch.reverseGeocode(lat, lon).catch(() => null);
-      const manualName = String(options.name || '').trim();
-      const name = manualName || buildAutoFavoriteName(place, lat, lon);
-      const sourceLabel = options.sourceLabel || place?.label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-      upsertFavorite({ name, lat, lon, alt: options.alt || 85000, sourceLabel });
-      return { name, sourceLabel };
-    }
-
-    sharedState.saveFavoriteAtLocation = saveFavoriteAtLocation;
-
-    addCurrentBtn.addEventListener('click', async () => {
-      const inputName = (nameInput.value || '').trim();
-      const carto = viewer.camera.positionCartographic;
-      if (!carto) return;
-      const lat = Cesium.Math.toDegrees(carto.latitude);
-      const lon = Cesium.Math.toDegrees(carto.longitude);
-      let place = null;
-      let sourceLabel = '';
-      try {
-        place = await window.WorldSearch.reverseGeocode(lat, lon);
-        sourceLabel = place?.label || '';
-      } catch (error) { console.warn(error); }
-      const name = inputName || buildAutoFavoriteName(place, lat, lon);
-      upsertFavorite({ name, lat, lon, alt: carto.height, sourceLabel });
-    });
-
-    addManualBtn.addEventListener('click', async () => {
-      const name = (nameInput.value || '').trim();
-      if (!name) {
-        alert('즐겨찾기 이름을 입력해 주세요.');
-        return;
-      }
-      const coords = parseLatLon(coordsInput.value);
-      if (coords) {
-        upsertFavorite({ name, lat: coords.lat, lon: coords.lon, alt: 85000, sourceLabel: '직접 좌표 입력' });
-        return;
-      }
-      const postal = (postalInput.value || '').trim();
-      if (!postal) {
-        alert('위도/경도 또는 우편번호를 입력해 주세요.');
-        return;
-      }
-      try {
-        const resolved = await geocodePostal(postal);
-        if (!resolved) {
-          alert('우편번호 위치를 찾지 못했습니다.');
-          return;
-        }
-        upsertFavorite({ name, lat: resolved.lat, lon: resolved.lon, alt: 85000, postalCode: postal, sourceLabel: resolved.label || '우편번호 입력' });
-      } catch (error) {
-        console.warn(error);
-        alert('우편번호 위치를 찾지 못했습니다.');
-      }
-    });
-
-    const middleHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-    middleHandler.setInputAction(async movement => {
-      const screenPos = movement.position;
-      const cartesian = viewer.camera.pickEllipsoid(screenPos, viewer.scene.globe.ellipsoid);
-      if (!cartesian) return;
-      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-      if (!cartographic) return;
-      const lat = Cesium.Math.toDegrees(cartographic.latitude);
-      const lon = Cesium.Math.toDegrees(cartographic.longitude);
-      try {
-        await saveFavoriteAtLocation(lat, lon, { alt: viewer.camera.positionCartographic?.height || 85000 });
-      } catch (error) {
-        console.warn(error);
-      }
-    }, Cesium.ScreenSpaceEventType.MIDDLE_CLICK);
-
-    renderFavorites();
-  }
-
-  function loadFavorites() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
-      return Array.isArray(raw) ? raw : [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function parseLatLon(value) {
-    const text = String(value || '').trim();
-    if (!text) return null;
-    const parts = text.split(/[\s,]+/).filter(Boolean);
-    if (parts.length < 2) return null;
-    const lat = Number(parts[0]);
-    const lon = Number(parts[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-    return { lat, lon };
-  }
-
-  async function geocodePostal(postal) {
-    const url = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=1&langCode=KO&outFields=*&singleLine=' + encodeURIComponent(postal);
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!response.ok) return null;
-    const data = await response.json();
-    const item = Array.isArray(data.candidates) ? data.candidates[0] : null;
-    if (!item || !item.location) return null;
-    return {
-      lat: Number(item.location.y),
-      lon: Number(item.location.x),
-      label: item.address || item.attributes?.LongLabel || postal,
-    };
-  }
-
   function wireMobileGestures(viewer) {
     const isMobile = window.matchMedia('(max-width: 768px)').matches;
     if (!isMobile) return;

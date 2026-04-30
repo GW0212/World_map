@@ -168,23 +168,11 @@
     .tool-panel.open { display: block; }
     .panel-title { font-size: 13px; font-weight: 800; margin-bottom: 10px; }
     .panel-desc { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
-    .fav-grid { display: grid; gap: 8px; }
-    .fav-grid input { width: 100%; border: 1px solid rgba(148,163,184,.24); background: rgba(255,255,255,.06); color: #fff; border-radius: 10px; padding: 10px 11px; outline: none; }
-    .fav-grid input::placeholder { color: #94a3b8; }
-    .fav-actions-top { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .fav-actions-top button, .style-option, .copy-btn {
+    .style-option, .copy-btn {
       border: 0; border-radius: 10px; cursor: pointer; padding: 10px 11px; font-weight: 700;
       color: #fff; background: linear-gradient(180deg, #2563eb, #1d4ed8);
     }
     .copy-btn { width: 100%; margin-top: 8px; }
-    .fav-list { display: grid; gap: 8px; margin-top: 12px; max-height: 240px; overflow-y: auto; }
-    .fav-item { display: flex; gap: 10px; justify-content: space-between; align-items: center; background: rgba(255,255,255,.06); border-radius: 12px; padding: 10px; }
-    .fav-name { font-weight: 800; font-size: 13px; }
-    .fav-sub { margin-top: 4px; color: #94a3b8; font-size: 11px; }
-    .fav-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-    .fav-actions button { border: 0; border-radius: 8px; padding: 7px 8px; cursor: pointer; background: rgba(255,255,255,.1); color: #fff; font-size: 11px; }
-    .fav-empty { color: #94a3b8; font-size: 12px; padding: 8px 2px; }
-    #favorites-panel { width: 320px; }
     #style-panel { width: 260px; }
     .style-options { display: grid; gap: 8px; }
     .style-option {
@@ -338,11 +326,6 @@
         border-radius: 16px;
         padding: 12px;
       }
-
-      /* 즐겨찾기/스타일 패널 크기 */
-      #favorites-panel { width: 100%; }
-
-      /* 미니맵 - 모바일에서 숨김 (작은 화면에서 불필요) */
       #minimap { display: none; }
 
       /* 마우스 정보 숨김 */
@@ -386,28 +369,6 @@
       }
       #imagery-meta-mobile-btn svg { width: 27px; height: 27px; stroke: currentColor; fill: none; stroke-width: 2.05; stroke-linecap: round; stroke-linejoin: round; }
       #imagery-meta-mobile-btn:active { transform: scale(.96); }
-
-      /* 즐겨찾기 패널은 우측 툴 아이콘 영역을 침범하지 않도록 폭을 제한 */
-      #favorites-panel {
-        left: 50%;
-        right: auto;
-        bottom: calc(10px + env(safe-area-inset-bottom));
-        transform: translateX(-50%);
-        width: min(268px, calc(100vw - 120px - env(safe-area-inset-left) - env(safe-area-inset-right)));
-        max-width: min(268px, calc(100vw - 120px - env(safe-area-inset-left) - env(safe-area-inset-right)));
-        border-radius: 16px;
-        max-height: min(42dvh, 330px);
-        padding: 11px;
-        padding-bottom: 11px;
-      }
-      #favorites-panel .panel-title { font-size: 12.5px; margin-bottom: 8px; }
-      #favorites-panel .panel-desc { font-size: 10.5px; line-height: 1.4; margin-bottom: 10px; }
-      #favorites-panel .fav-grid { gap: 6px; }
-      #favorites-panel .fav-grid input { padding: 8px 10px; font-size: 13px; border-radius: 9px; }
-      #favorites-panel .fav-actions-top { gap: 6px; }
-      #favorites-panel .fav-actions-top button { padding: 9px 8px; font-size: 12px; border-radius: 9px; }
-      #favorites-panel .fav-list { max-height: 150px; margin-top: 9px; gap: 6px; }
-
       /* 검색 결과 아이템 터치 영역 */
       .r-item { min-height: 52px; padding: 10px 14px; }
       .r-name { font-size: 15px; }
@@ -495,9 +456,6 @@
     <button id="style-toggle-btn" class="tool-circle" type="button" title="지도 스타일 전환">
       <svg viewBox="0 0 24 24"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21 1 6"></polygon><line x1="8" y1="3" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="21"></line></svg>
     </button>
-    <button id="favorites-toggle-btn" class="tool-circle" type="button" title="즐겨찾기 위치">
-      <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-    </button>
   </div>
 
   <div id="style-panel" class="tool-panel">
@@ -514,23 +472,6 @@
       </button>
     </div>
   </div>
-
-  <div id="favorites-panel" class="tool-panel">
-    <div class="panel-title">즐겨찾기 · 위치 저장</div>
-    <div class="panel-desc">현재 보고 있는 위치를 저장하거나, 위도/경도 또는 우편번호로 직접 추가할 수 있습니다.</div>
-    <input type="hidden" id="fav-edit-id">
-    <div class="fav-grid">
-      <input id="fav-name" type="text" placeholder="예: 서울시청 / 집 / 회사 / 면접장">
-      <input id="fav-coords" type="text" placeholder="직접 좌표 추가: 위도, 경도">
-      <input id="fav-postal" type="text" placeholder="또는 우편번호 입력">
-      <div class="fav-actions-top">
-        <button id="fav-add-current" type="button">현재 위치 저장</button>
-        <button id="fav-add-manual" type="button">직접 추가/수정</button>
-      </div>
-    </div>
-    <div id="favorites-list" class="fav-list"></div>
-  </div>
-
   <button id="globe-home-btn" type="button" aria-label="홈 화면으로 이동" title="지구 보기"><img src="earth-loading.png" alt="지구"></button>
 
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.95.0/Build/Cesium/Cesium.js"></script>
@@ -540,6 +481,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260430-mobile-imagery-panel-exclusive-v1"></script>
+  <script src="js/app.js?v=20260430-remove-favorites-v1"></script>
 </body>
 </html>
