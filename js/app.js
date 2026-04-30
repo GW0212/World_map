@@ -2496,6 +2496,11 @@ out geom qt;`;
           closeMetadataCard();
           return;
         }
+        // 모바일에서 지도 스타일/즐겨찾기 패널이 열린 상태로 위성 정보 버튼을 누르면
+        // 기존 패널을 먼저 닫고 위성 정보 창만 열리게 한다.
+        if (typeof closeOtherPanels === 'function') {
+          closeOtherPanels(null);
+        }
         handleCenterLookup();
       });
     }
