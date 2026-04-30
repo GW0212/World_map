@@ -389,18 +389,16 @@
 
       /* 즐겨찾기 패널은 우측 툴 아이콘 영역을 침범하지 않도록 폭을 제한 */
       #favorites-panel {
-        left: 10px;
-        left: calc(10px + env(safe-area-inset-left));
+        left: 50%;
         right: auto;
         bottom: calc(10px + env(safe-area-inset-bottom));
-        width: calc(100vw - 96px);
-        max-width: 300px;
-        width: min(300px, calc(100vw - 96px - env(safe-area-inset-left) - env(safe-area-inset-right)));
-        max-width: min(300px, calc(100vw - 96px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+        transform: translateX(-50%);
+        width: min(268px, calc(100vw - 120px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+        max-width: min(268px, calc(100vw - 120px - env(safe-area-inset-left) - env(safe-area-inset-right)));
         border-radius: 16px;
-        max-height: min(46dvh, 360px);
-        padding: 12px;
-        padding-bottom: 12px;
+        max-height: min(42dvh, 330px);
+        padding: 11px;
+        padding-bottom: 11px;
       }
       #favorites-panel .panel-title { font-size: 12.5px; margin-bottom: 8px; }
       #favorites-panel .panel-desc { font-size: 10.5px; line-height: 1.4; margin-bottom: 10px; }
@@ -542,6 +540,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260430-mobile-quality-location-v1"></script>
+  <script src="js/app.js?v=20260430-pc-imagery-click-restore-v1"></script>
 </body>
 </html>

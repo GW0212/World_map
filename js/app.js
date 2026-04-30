@@ -2266,6 +2266,13 @@ out geom qt;`;
       card.style.top = top + 'px';
     }
 
+    function closeMetadataCard() {
+      queryToken += 1;
+      card.classList.remove('show');
+    }
+
+    window.closeImageryMetadataCard = closeMetadataCard;
+
     function showStatus(message, pointer) {
       content.className = 'im-status';
       content.textContent = message;
@@ -2478,13 +2485,17 @@ out geom qt;`;
     if (closeBtn) {
       closeBtn.addEventListener('click', (event) => {
         event.stopPropagation();
-        card.classList.remove('show');
+        closeMetadataCard();
       });
     }
     card.addEventListener('click', event => event.stopPropagation());
     if (mobileBtn) {
       mobileBtn.addEventListener('click', (event) => {
         event.stopPropagation();
+        if (card.classList.contains('show')) {
+          closeMetadataCard();
+          return;
+        }
         handleCenterLookup();
       });
     }
@@ -3060,6 +3071,11 @@ out geom qt;`;
 
 
   function closeOtherPanels(exceptId) {
+    // PC 지도 클릭으로 위성 사진 정보 창이 열릴 때 같은 클릭 이벤트가 document까지
+    // 버블링되며 즉시 닫히지 않도록, 다른 도구 패널을 여는 경우에만 닫는다.
+    if (exceptId && typeof window.closeImageryMetadataCard === 'function') {
+      window.closeImageryMetadataCard();
+    }
     document.querySelectorAll('.tool-panel.open').forEach((panel) => {
       if (!exceptId || panel.id !== exceptId) panel.classList.remove('open');
     });
