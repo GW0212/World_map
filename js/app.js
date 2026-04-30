@@ -31,8 +31,8 @@
     const mobile = isMobileDevice();
     if (Cesium.RequestScheduler) {
       Cesium.RequestScheduler.throttleRequests = true;
-      Cesium.RequestScheduler.maximumRequestsPerServer = mobile ? 4 : 6;
-      Cesium.RequestScheduler.maximumRequests = mobile ? 12 : 32;
+      Cesium.RequestScheduler.maximumRequestsPerServer = mobile ? 6 : 6;
+      Cesium.RequestScheduler.maximumRequests = mobile ? 22 : 32;
     }
   }
 
@@ -291,6 +291,7 @@
       creditContainer: creditSink,
       requestRenderMode: true,
       maximumRenderTimeChange: Infinity,
+      useBrowserRecommendedResolution: false,
     };
     try {
       // UrlTemplateImageryProvider: 메타데이터 요청 없이 즉시 타일 로드 시작 (무한로딩 방지)
@@ -2094,11 +2095,11 @@ out geom qt;`;
     scene.globe.enableLighting = false;
     scene.globe.depthTestAgainstTerrain = false;
     // 타일 해상도: 모바일은 SSE 높여 타일 요청 수 대폭 절감 (트래픽 핵심)
-    scene.globe.maximumScreenSpaceError = isMobile ? 6.5 : 2.2;
-    scene.globe.preloadAncestors = !isMobile; // 모바일: 선제 로딩 비활성화
-    scene.globe.loadingDescendantsLimit = isMobile ? 3 : 12;
+    scene.globe.maximumScreenSpaceError = isMobile ? 2.8 : 2.2;
+    scene.globe.preloadAncestors = true; // 모바일도 부모 타일을 유지해 흐릿한 타일 잔상을 줄인다
+    scene.globe.loadingDescendantsLimit = isMobile ? 8 : 12;
     // 캐시: 모바일 메모리 절약, PC는 재다운로드 방지
-    scene.globe.tileCacheSize = isMobile ? 72 : 320;
+    scene.globe.tileCacheSize = isMobile ? 180 : 320;
     scene.skyAtmosphere.show = false;
     scene.sun.show = false;
     scene.moon.show = false;
@@ -2113,8 +2114,8 @@ out geom qt;`;
 
     // HiDPI 지원: 데스크탑 최대 1.75×, 모바일은 1.0 고정 (성능 우선)
     const dpr = window.devicePixelRatio || 1;
-    viewer.resolutionScale = isMobile ? Math.min(dpr, 0.9) : Math.min(dpr, 1.5);
-    viewer.targetFrameRate = isMobile ? 28 : 45;
+    viewer.resolutionScale = isMobile ? Math.min(dpr, 1.35) : Math.min(dpr, 1.5);
+    viewer.targetFrameRate = isMobile ? 36 : 45;
 
     const controller = scene.screenSpaceCameraController;
     controller.maximumZoomDistance = HOME_VIEW.alt;
@@ -2243,11 +2244,12 @@ out geom qt;`;
       if (isMobile) {
         // 우측 툴 아이콘/지구 버튼 터치 영역을 침범하지 않도록 오른쪽 여백을 고정 확보한다.
         card.style.left = '12px';
-        card.style.right = 'calc(74px + env(safe-area-inset-right))';
+        card.style.left = 'calc(12px + env(safe-area-inset-left))';
+        card.style.right = 'calc(78px + env(safe-area-inset-right))';
         card.style.top = 'auto';
         card.style.bottom = 'calc(124px + env(safe-area-inset-bottom))';
         card.style.width = 'auto';
-        card.style.maxHeight = 'min(46dvh, 380px)';
+        card.style.maxHeight = 'min(42dvh, 340px)';
         card.style.overflowY = 'auto';
         return;
       }
@@ -2271,9 +2273,20 @@ out geom qt;`;
       positionCard(pointer || { x: window.innerWidth / 2, y: window.innerHeight / 2 });
     }
 
+    function cleanKoreanAdminName(name) {
+      return String(name || '')
+        .replace('특별시', '')
+        .replace('광역시', '')
+        .replace('특별자치시', '')
+        .replace('특별자치도', '')
+        .replace('자치시', '')
+        .replace('자치도', '')
+        .trim();
+    }
+
     function buildLocationInfo(place, lat, lon) {
       if (place && place.label) return place.label;
-      const parts = [place && place.country, place && place.city, place && place.district, place && place.neighbourhood]
+      const parts = [place && place.neighbourhood, place && place.district, place && place.city, place && place.country]
         .map(value => String(value || '').trim())
         .filter(Boolean);
       const unique = [];
@@ -2281,15 +2294,54 @@ out geom qt;`;
       return unique.join(' · ') || (lat.toFixed(5) + ', ' + lon.toFixed(5));
     }
 
+    function buildArcgisLocationLabel(address, lat, lon) {
+      const addr = address || {};
+      const countryCode = String(addr.CountryCode || '').toUpperCase();
+      const isKorea = countryCode === 'KOR' || countryCode === 'KR' || /대한민국|South Korea|Korea/i.test(String(addr.Country || addr.LongLabel || ''));
+      let parts;
+      if (isKorea) {
+        parts = [
+          addr.Address || addr.Neighborhood || addr.PlaceName,
+          addr.District || addr.Subregion,
+          cleanKoreanAdminName(addr.City || addr.Region),
+        ];
+      } else {
+        parts = [
+          addr.Address || addr.Neighborhood || addr.PlaceName,
+          addr.City || addr.Subregion,
+          addr.Region,
+          addr.Country,
+        ];
+      }
+      const unique = [];
+      parts.map(value => String(value || '').trim()).filter(Boolean).forEach(part => {
+        if (!unique.includes(part)) unique.push(part);
+      });
+      return unique.join(' · ') || (lat.toFixed(5) + ', ' + lon.toFixed(5));
+    }
+
     async function resolveLocationInfo(lat, lon) {
+      const coordText = lat.toFixed(5) + ', ' + lon.toFixed(5);
+      try {
+        const url = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=json&langCode=KO&location=' +
+          encodeURIComponent(lon.toFixed(6) + ',' + lat.toFixed(6));
+        const response = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (response.ok) {
+          const json = await response.json();
+          const label = buildArcgisLocationLabel(json && json.address, lat, lon);
+          if (label) return label;
+        }
+      } catch (error) {
+        console.warn('imagery metadata ArcGIS reverse geocode failed:', error);
+      }
       try {
         if (window.WorldSearch && typeof window.WorldSearch.reverseGeocode === 'function') {
           return buildLocationInfo(await window.WorldSearch.reverseGeocode(lat, lon), lat, lon);
         }
       } catch (error) {
-        console.warn('imagery metadata reverse geocode failed:', error);
+        console.warn('imagery metadata fallback reverse geocode failed:', error);
       }
-      return lat.toFixed(5) + ', ' + lon.toFixed(5);
+      return coordText;
     }
 
     function showMetadata(attributes, lat, lon, zoom, pointer, locationInfo) {
@@ -2404,16 +2456,13 @@ out geom qt;`;
       if (!isMobileViewport()) {
         mobileBtn.style.left = '';
         mobileBtn.style.right = '';
+        mobileBtn.style.bottom = '';
         return;
       }
-      const infoBar = document.getElementById('info-bar');
-      if (!infoBar) return;
-      const rect = infoBar.getBoundingClientRect();
-      const size = mobileBtn.offsetWidth || 50;
-      const gap = 8;
-      const left = Math.max(10, Math.round(rect.left - size - gap));
-      mobileBtn.style.left = left + 'px';
+      // 지구 아이콘이 우측 하단 10px에 있으므로, 위성 정보 아이콘은 좌측 하단 10px에 고정해 대칭을 맞춘다.
+      mobileBtn.style.left = 'calc(10px + env(safe-area-inset-left))';
       mobileBtn.style.right = 'auto';
+      mobileBtn.style.bottom = 'calc(12px + env(safe-area-inset-bottom))';
     }
 
     if (mobileBtn) {
@@ -2568,6 +2617,23 @@ out geom qt;`;
       }, 120);
     }
 
+    function updateLatLonInfoFromCartesian(cartesian) {
+      if (!cartesian) return null;
+      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+      if (!cartographic) return null;
+      const lat = Cesium.Math.toDegrees(cartographic.latitude);
+      const lon = Cesium.Math.toDegrees(cartographic.longitude);
+      ibLat.textContent = (lat >= 0 ? 'N ' : 'S ') + Math.abs(lat).toFixed(4) + '°';
+      ibLon.textContent = (lon >= 0 ? 'E ' : 'W ') + Math.abs(lon).toFixed(4) + '°';
+      return { lat, lon };
+    }
+
+    function getCenterCartesian() {
+      const canvas = scene && scene.canvas;
+      if (!canvas) return null;
+      return pickCartesian(new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2));
+    }
+
     function updateFromCartesian(cartesian, pointer, screenPosition) {
       const cameraPosition = viewer.camera.positionCartographic;
       if (!cameraPosition) return;
@@ -2578,12 +2644,10 @@ out geom qt;`;
       if (ibZoom) ibZoom.textContent = 'Z' + zoom;
       if (!cartesian || !pointer) return;
 
-      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-      if (!cartographic) return;
-      const lat = Cesium.Math.toDegrees(cartographic.latitude);
-      const lon = Cesium.Math.toDegrees(cartographic.longitude);
-      ibLat.textContent = (lat >= 0 ? 'N ' : 'S ') + Math.abs(lat).toFixed(4) + '°';
-      ibLon.textContent = (lon >= 0 ? 'E ' : 'W ') + Math.abs(lon).toFixed(4) + '°';
+      const pickedLatLon = updateLatLonInfoFromCartesian(cartesian);
+      if (!pickedLatLon) return;
+      const lat = pickedLatLon.lat;
+      const lon = pickedLatLon.lon;
 
       const pickedInfo = extractPickedInfo(screenPosition || pointer);
       if (pickedInfo && pickedInfo.exact) {
@@ -2633,7 +2697,15 @@ out geom qt;`;
       const altText = formatAltitude(cameraPosition.height);
       if (ibAlt.textContent !== altText) ibAlt.textContent = altText;
       if (ibZoom && ibZoom.textContent !== zoomText) ibZoom.textContent = zoomText;
-      // 포인터 위치 업데이트: throttle (모바일 100ms, 데스크탑 50ms)
+      // 모바일은 손가락 탭 위치가 아니라 화면 중앙 십자선 기준 좌표를 정보바와 위성정보가 함께 사용한다.
+      // 이 처리가 없으면 PC/모바일에서 같은 위치로 이동해도 정보바/위성정보 위치가 서로 다르게 보일 수 있다.
+      if (_isMobile) {
+        const centerCartesian = getCenterCartesian();
+        if (centerCartesian) updateLatLonInfoFromCartesian(centerCartesian);
+        return;
+      }
+
+      // 포인터 위치 업데이트: throttle (데스크탑 50ms)
       const now = performance.now();
       if (now - _lastPostRenderMs < _postRenderThrottleMs) return;
       _lastPostRenderMs = now;
