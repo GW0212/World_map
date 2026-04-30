@@ -2241,15 +2241,20 @@ out geom qt;`;
     function positionCard(pointer) {
       const isMobile = window.matchMedia('(max-width: 768px)').matches;
       if (isMobile) {
+        // 우측 툴 아이콘/지구 버튼 터치 영역을 침범하지 않도록 오른쪽 여백을 고정 확보한다.
         card.style.left = '12px';
-        card.style.right = '12px';
+        card.style.right = 'calc(74px + env(safe-area-inset-right))';
         card.style.top = 'auto';
         card.style.bottom = 'calc(124px + env(safe-area-inset-bottom))';
         card.style.width = 'auto';
+        card.style.maxHeight = 'min(46dvh, 380px)';
+        card.style.overflowY = 'auto';
         return;
       }
       card.style.right = 'auto';
       card.style.bottom = 'auto';
+      card.style.maxHeight = '';
+      card.style.overflowY = '';
       card.style.width = '292px';
       const width = card.offsetWidth || 292;
       const height = card.offsetHeight || 180;
@@ -2266,26 +2271,39 @@ out geom qt;`;
       positionCard(pointer || { x: window.innerWidth / 2, y: window.innerHeight / 2 });
     }
 
-    function showMetadata(attributes, lat, lon, zoom, pointer) {
+    function buildLocationInfo(place, lat, lon) {
+      if (place && place.label) return place.label;
+      const parts = [place && place.country, place && place.city, place && place.district, place && place.neighbourhood]
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+      const unique = [];
+      parts.forEach(part => { if (!unique.includes(part)) unique.push(part); });
+      return unique.join(' · ') || (lat.toFixed(5) + ', ' + lon.toFixed(5));
+    }
+
+    async function resolveLocationInfo(lat, lon) {
+      try {
+        if (window.WorldSearch && typeof window.WorldSearch.reverseGeocode === 'function') {
+          return buildLocationInfo(await window.WorldSearch.reverseGeocode(lat, lon), lat, lon);
+        }
+      } catch (error) {
+        console.warn('imagery metadata reverse geocode failed:', error);
+      }
+      return lat.toFixed(5) + ', ' + lon.toFixed(5);
+    }
+
+    function showMetadata(attributes, lat, lon, zoom, pointer, locationInfo) {
       const dateText = formatArcgisDate(attributes.SRC_DATE2, attributes.SRC_DATE);
       const resolution = attributes.SRC_RES || attributes.SRC_RES === 0 ? Number(attributes.SRC_RES).toFixed(Number(attributes.SRC_RES) < 1 ? 2 : 1).replace(/\.0$/, '') + ' m' : '';
-      const accuracy = attributes.SRC_ACC || attributes.SRC_ACC === 0 ? Number(attributes.SRC_ACC).toFixed(Number(attributes.SRC_ACC) < 1 ? 2 : 1).replace(/\.0$/, '') + ' m' : '';
-      const provider = attributes.NICE_NAME || attributes.SRC_DESC || '';
-      const source = attributes.NICE_DESC || '';
-      const release = attributes.ReleaseName || attributes.BlockName || '';
       content.className = '';
       content.innerHTML =
         '<div class="im-grid">' +
         makeRow('촬영일', dateText) +
         makeRow('해상도', resolution) +
-        makeRow('정확도', accuracy) +
-        makeRow('출처정보', provider) +
-        makeRow('소스', source) +
-        makeRow('릴리즈', release) +
+        makeRow('위치', locationInfo || (lat.toFixed(5) + ', ' + lon.toFixed(5))) +
         makeRow('좌표', lat.toFixed(5) + ', ' + lon.toFixed(5)) +
-        makeRow('줌', 'Z' + zoom) +
         '</div>' +
-        '<div class="im-note">같은 좌표라도 줌 레벨에 따라 다른 타일 메타데이터가 나올 수 있습니다.</div>';
+        '<div class="im-note">위치 정보는 지도/지오코딩 데이터 기준이며 실제 행정구역과 일부 다를 수 있습니다.</div>';
       card.classList.add('show');
       positionCard(pointer);
     }
@@ -2344,7 +2362,7 @@ out geom qt;`;
       if (!picked) return;
       const zoom = getApproxZoom();
       const token = ++queryToken;
-      showStatus('Esri 위성 메타데이터 조회 중...', pointer);
+      showStatus('위성 사진 정보 조회 중...', pointer);
       try {
         let metadata = null;
         try {
@@ -2358,7 +2376,10 @@ out geom qt;`;
           showStatus('이 좌표에서 표시할 수 있는 Esri 메타데이터를 찾지 못했습니다. 조금 더 확대하거나 주변을 다시 시도해 주세요.', pointer);
           return;
         }
-        showMetadata(metadata, picked.lat, picked.lon, zoom, pointer);
+        showStatus('위치 정보 확인 중...', pointer);
+        const locationInfo = await resolveLocationInfo(picked.lat, picked.lon);
+        if (token !== queryToken) return;
+        showMetadata(metadata, picked.lat, picked.lon, zoom, pointer, locationInfo);
       } catch (error) {
         if (token !== queryToken) return;
         console.warn('Esri imagery metadata lookup failed:', error);

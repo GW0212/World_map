@@ -416,11 +416,16 @@
 
   <div id="cesiumContainer"></div>
   <div id="imagery-meta-crosshair" aria-hidden="true"><span></span></div>
-  <button id="imagery-meta-mobile-btn" type="button" aria-label="중앙 위치 촬영일 확인" title="중앙 위치 촬영일 확인">
+  <button id="imagery-meta-mobile-btn" type="button" aria-label="중앙 위치 위성사진 정보 확인" title="중앙 위치 위성사진 정보 확인">
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 8.5h3.1L8.7 6h6.6l1.6 2.5H20a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"></path>
-      <circle cx="12" cy="14" r="3.2"></circle>
-      <path d="M18.6 11.1h.01"></path>
+      <path d="M13.2 5.2 18.8 10.8 10.8 18.8 5.2 13.2z"></path>
+      <path d="M18.8 10.8 21.3 8.3 15.7 2.7 13.2 5.2"></path>
+      <path d="M5.2 13.2 2.7 15.7 8.3 21.3 10.8 18.8"></path>
+      <path d="M10.3 8.7 15.3 13.7"></path>
+      <path d="M7.4 5.1 5.8 3.5"></path>
+      <path d="M18.2 20.5 16.6 18.9"></path>
+      <path d="M20.4 15.6c1.2-1.2 1.2-3.1 0-4.3"></path>
+      <path d="M3.6 8.4c-1.2 1.2-1.2 3.1 0 4.3"></path>
     </svg>
   </button>
   <div id="toast">링크가 복사되었습니다.</div>
@@ -435,7 +440,7 @@
       <div class="im-title">위성 사진 정보</div>
       <button id="imagery-meta-close" type="button" title="닫기">×</button>
     </div>
-    <div id="imagery-meta-content" class="im-status">PC는 지도 클릭, 모바일은 중앙 십자선 기준으로 촬영일을 조회합니다.</div>
+    <div id="imagery-meta-content" class="im-status">PC는 지도 클릭, 모바일은 중앙 십자선 기준으로 위성사진 정보를 조회합니다.</div>
   </div>
 
   <div id="search-wrap">
@@ -526,6 +531,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260430-mobile-ui-v1"></script>
+  <script src="js/app.js?v=20260430-satellite-info-v2"></script>
 </body>
 </html>
