@@ -139,8 +139,20 @@
     }
     .zi-l { writing-mode: vertical-lr; transform: rotate(180deg); font-size: 8px; letter-spacing: 2px; color: rgba(148,163,184,.8); font-weight: 700; }
     .zi-track { width: 6px; height: 120px; background: rgba(255,255,255,.12); border-radius: 999px; overflow: hidden; border: 1px solid rgba(255,255,255,.1); }
+    #zoom-ind, .zi-track { user-select: none; -webkit-user-select: none; }
     #zi-fill { width: 100%; height: 0; background: linear-gradient(to top, #3b82f6, #93c5fd); transition: height .2s ease; border-radius: 999px; }
     #zi-val { font-size: 10px; font-weight: 800; color: #93c5fd; }
+    .zi-btn {
+      width: 30px; height: 30px; border: 0; border-radius: 999px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: #eaf2ff; background: rgba(255,255,255,.12);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.14);
+      transition: transform .14s ease, background .14s ease;
+      touch-action: manipulation;
+    }
+    .zi-btn:hover { transform: scale(1.06); background: rgba(59,130,246,.34); }
+    .zi-btn:active { transform: scale(.96); }
+    .zi-btn svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 
     #globe-home-btn {
       position: fixed; right: 15px; bottom: 18px; z-index: 25;
@@ -285,7 +297,9 @@
         padding: 10px 0;
         transform: none;
       }
-      .zi-track { height: 116px; }
+      .zi-track { height: 92px; }
+      .zi-btn { width: 32px; height: 32px; }
+      .zi-btn svg { width: 17px; height: 17px; }
 
       /* 전세계 위치 버튼 - safe area 대응 */
       #globe-home-btn {
@@ -441,9 +455,15 @@
       </div>
 
   <div id="zoom-ind">
+    <button id="zoom-in-btn" class="zi-btn" type="button" title="줌 인" aria-label="줌 인">
+      <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"></path></svg>
+    </button>
     <div class="zi-l">zoom</div>
     <div class="zi-track"><div id="zi-fill"></div></div>
     <div id="zi-val">—</div>
+    <button id="zoom-out-btn" class="zi-btn" type="button" title="줌 아웃" aria-label="줌 아웃">
+      <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+    </button>
   </div>
 
   <div class="tool-stack">
@@ -481,6 +501,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260430-remove-favorites-v1"></script>
+  <script src="js/app.js?v=20260430-zoom-buttons-v1"></script>
 </body>
 </html>

@@ -2532,11 +2532,88 @@ out geom qt;`;
       return Math.max(0, Math.min(MAX_Z, z));
     }
 
+    function zoomToAlt(zoom) {
+      const safeZoom = Math.max(0, Math.min(MAX_Z, Number(zoom) || 0));
+      return 300 * Math.pow(2, 19 - safeZoom);
+    }
+
     function formatAltitude(height) {
       if (height >= 1e6) return (height / 1e6).toFixed(2) + ' Mm';
       if (height >= 1e3) return (height / 1e3).toFixed(1) + ' km';
       return height.toFixed(0) + ' m';
     }
+
+    function applyZoomLevel(targetZoom) {
+      const controller = scene.screenSpaceCameraController;
+      const current = viewer.camera.positionCartographic;
+      if (!current) return;
+
+      const safeZoom = Math.max(0, Math.min(MAX_Z, Math.round(Number(targetZoom) || 0)));
+      const minHeight = controller.minimumZoomDistance || 0;
+      const maxHeight = controller.maximumZoomDistance || Number.POSITIVE_INFINITY;
+      const targetHeight = Math.max(minHeight, Math.min(maxHeight, zoomToAlt(safeZoom)));
+      const safeLat = clampLatitudeRadians(current.latitude);
+
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromRadians(current.longitude, safeLat, targetHeight),
+        orientation: {
+          heading: viewer.camera.heading,
+          pitch: viewer.camera.pitch,
+          roll: viewer.camera.roll,
+        },
+      });
+
+      const appliedZoom = altToZoom(targetHeight);
+      const zoomText = 'Z' + appliedZoom;
+      ziVal.textContent = zoomText;
+      ziFill.style.height = Math.round((appliedZoom / MAX_Z) * 100) + '%';
+      ibAlt.textContent = formatAltitude(targetHeight);
+      if (ibZoom) ibZoom.textContent = zoomText;
+      scene.requestRender();
+    }
+
+    function stepZoom(delta) {
+      const current = viewer.camera.positionCartographic;
+      const currentZoom = current ? altToZoom(current.height) : 0;
+      applyZoomLevel(currentZoom + delta);
+    }
+
+    function wireZoomGaugeControl() {
+      const zoomIndicator = document.getElementById('zoom-ind');
+      const zoomInBtn = document.getElementById('zoom-in-btn');
+      const zoomOutBtn = document.getElementById('zoom-out-btn');
+      const zoomTrack = document.querySelector('#zoom-ind .zi-track');
+      if (!zoomIndicator) return;
+
+      // 게이지바 직접 클릭/드래그 줌은 위치 계산 오동작 여지가 있어 비활성화.
+      // 위/아래 화살표 버튼으로 PC/모바일 모두 1단계씩 안정적으로 줌 변경.
+      const stopOnly = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      if (zoomTrack) {
+        zoomTrack.addEventListener('pointerdown', stopOnly, { passive: false });
+        zoomTrack.addEventListener('click', stopOnly, { passive: false });
+      }
+
+      const bindStepButton = (button, delta) => {
+        if (!button) return;
+        button.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }, { passive: false });
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          stepZoom(delta);
+        }, { passive: false });
+      };
+
+      bindStepButton(zoomInBtn, 1);
+      bindStepButton(zoomOutBtn, -1);
+    }
+
+    wireZoomGaugeControl();
 
     const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
     let reverseLookupToken = 0;
