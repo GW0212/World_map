@@ -2378,6 +2378,33 @@ out geom qt;`;
       handleMetadataLookup(position, { pointer: { x: window.innerWidth / 2, y: window.innerHeight / 2 } });
     }
 
+    function syncMobileMetaButtonPosition() {
+      if (!mobileBtn) return;
+      if (!isMobileViewport()) {
+        mobileBtn.style.left = '';
+        mobileBtn.style.right = '';
+        return;
+      }
+      const infoBar = document.getElementById('info-bar');
+      if (!infoBar) return;
+      const rect = infoBar.getBoundingClientRect();
+      const size = mobileBtn.offsetWidth || 50;
+      const gap = 8;
+      const left = Math.max(10, Math.round(rect.left - size - gap));
+      mobileBtn.style.left = left + 'px';
+      mobileBtn.style.right = 'auto';
+    }
+
+    if (mobileBtn) {
+      requestAnimationFrame(syncMobileMetaButtonPosition);
+      window.addEventListener('resize', syncMobileMetaButtonPosition, { passive: true });
+      window.addEventListener('orientationchange', () => setTimeout(syncMobileMetaButtonPosition, 160), { passive: true });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', syncMobileMetaButtonPosition, { passive: true });
+        window.visualViewport.addEventListener('scroll', syncMobileMetaButtonPosition, { passive: true });
+      }
+    }
+
     if (closeBtn) {
       closeBtn.addEventListener('click', (event) => {
         event.stopPropagation();

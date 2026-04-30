@@ -371,16 +371,34 @@
         background: rgba(15,23,42,.18);
       }
       #imagery-meta-mobile-btn {
-        position: fixed; left: 50%; bottom: 68px; bottom: calc(68px + env(safe-area-inset-bottom));
-        z-index: 61; display: inline-flex; align-items: center; justify-content: center;
-        transform: translateX(-50%); min-width: 196px; max-width: calc(100vw - 116px);
-        height: 44px; padding: 0 16px; border: 0; border-radius: 999px; cursor: pointer;
+        position: fixed;
+        left: max(10px, calc(50% - 172px));
+        bottom: 10px;
+        bottom: calc(10px + env(safe-area-inset-bottom));
+        z-index: 29;
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 50px; height: 50px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
         background: linear-gradient(180deg, #2563eb, #1d4ed8); color: #fff;
-        font-size: 13px; font-weight: 900; letter-spacing: -.2px;
-        box-shadow: 0 14px 32px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.18);
-        backdrop-filter: blur(10px); white-space: nowrap;
+        box-shadow: 0 10px 24px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.16);
+        backdrop-filter: blur(10px);
       }
-      #imagery-meta-mobile-btn:active { transform: translateX(-50%) scale(.98); }
+      #imagery-meta-mobile-btn svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 2.15; stroke-linecap: round; stroke-linejoin: round; }
+      #imagery-meta-mobile-btn:active { transform: scale(.96); }
+
+      /* 즐겨찾기 패널은 우측 툴 아이콘 영역을 침범하지 않도록 폭을 제한 */
+      #favorites-panel {
+        left: 10px;
+        right: calc(64px + env(safe-area-inset-right));
+        bottom: calc(10px + env(safe-area-inset-bottom));
+        width: auto;
+        max-width: none;
+        border-radius: 18px;
+        max-height: min(60dvh, 460px);
+        padding: 14px;
+        padding-bottom: 14px;
+      }
+      #favorites-panel .panel-title { font-size: 13px; }
+      #favorites-panel .panel-desc { font-size: 11px; line-height: 1.45; }
 
       /* 검색 결과 아이템 터치 영역 */
       .r-item { min-height: 52px; padding: 10px 14px; }
@@ -398,7 +416,13 @@
 
   <div id="cesiumContainer"></div>
   <div id="imagery-meta-crosshair" aria-hidden="true"><span></span></div>
-  <button id="imagery-meta-mobile-btn" type="button">중앙 위치 촬영일 확인</button>
+  <button id="imagery-meta-mobile-btn" type="button" aria-label="중앙 위치 촬영일 확인" title="중앙 위치 촬영일 확인">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 8.5h3.1L8.7 6h6.6l1.6 2.5H20a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"></path>
+      <circle cx="12" cy="14" r="3.2"></circle>
+      <path d="M18.6 11.1h.01"></path>
+    </svg>
+  </button>
   <div id="toast">링크가 복사되었습니다.</div>
 
   <div id="mouse-info">
@@ -502,6 +526,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260429-final-audit-v1"></script>
+  <script src="js/app.js?v=20260430-mobile-ui-v1"></script>
 </body>
 </html>
