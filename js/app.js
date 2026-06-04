@@ -3253,11 +3253,27 @@ out geom qt;`;
       }
       btn.disabled = true;
 
-      // maximumAge: 0 → 캐시 사용 안 함, 항상 새 위치 요청
-      navigator.geolocation.getCurrentPosition(position => {
+      // watchPosition으로 실시간 추적 시작
+      // 첫 번째 콜백은 캐시된 위치일 수 있으므로 스킵, 두 번째부터 사용
+      let callCount = 0;
+      let watchId = null;
+      const giveUpTimer = setTimeout(() => {
+        if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+        btn.disabled = false;
+        alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
+      }, 15000);
+
+      watchId = navigator.geolocation.watchPosition(position => {
+        callCount++;
+        if (callCount < 2) return; // 첫 번째(캐시 가능성) 스킵
+        clearTimeout(giveUpTimer);
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
         const { latitude, longitude } = position.coords;
         doFlyTo(latitude, longitude);
       }, error => {
+        clearTimeout(giveUpTimer);
+        if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
         btn.disabled = false;
         alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
         console.warn(error);
