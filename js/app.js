@@ -3218,321 +3218,79 @@ out geom qt;`;
 
   function wireCurrentLocation(viewer) {
     const btn = document.getElementById('my-location-btn');
-    const toast = document.getElementById('toast');
-    const permissionModal = document.getElementById('location-permission-modal');
-    const permissionAllowBtn = document.getElementById('location-permission-allow');
-    const permissionDenyBtn = document.getElementById('location-permission-deny');
-    let toastTimer = null;
-    let activeWatchId = null;
-    let activeTrackingTimer = null;
-    let activeFlyTimer = null;
-    if (!btn) return;
-
-    function showLocationToast(message, duration = 1800) {
-      if (!toast) return;
-      toast.textContent = message;
-      toast.classList.add('show');
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
-    }
-
-    function stopActiveWatch() {
-      if (activeWatchId !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(activeWatchId);
-        activeWatchId = null;
-      }
-      clearTimeout(activeTrackingTimer);
-      activeTrackingTimer = null;
-    }
-
-    function resetButton() {
-      btn.disabled = false;
-      btn.classList.remove('is-loading');
-    }
-
-
-    function requestPcLocationConsent() {
-      if (isMobileDevice() || !permissionModal || !permissionAllowBtn || !permissionDenyBtn) {
-        return Promise.resolve(true);
-      }
-
-      return new Promise(resolve => {
-        let settled = false;
-        const previousFocus = document.activeElement;
-
-        function cleanup(allowed) {
-          if (settled) return;
-          settled = true;
-          permissionModal.hidden = true;
-          permissionModal.setAttribute('aria-hidden', 'true');
-          permissionAllowBtn.removeEventListener('click', onAllow);
-          permissionDenyBtn.removeEventListener('click', onDeny);
-          permissionModal.removeEventListener('click', onBackdrop);
-          document.removeEventListener('keydown', onKeyDown);
-          if (previousFocus && typeof previousFocus.focus === 'function') {
-            try { previousFocus.focus({ preventScroll: true }); } catch (_) { previousFocus.focus(); }
-          }
-          resolve(allowed);
-        }
-
-        function onAllow(event) {
-          event.preventDefault();
-          event.stopPropagation();
-          cleanup(true);
-        }
-
-        function onDeny(event) {
-          event.preventDefault();
-          event.stopPropagation();
-          cleanup(false);
-        }
-
-        function onBackdrop(event) {
-          if (event.target === permissionModal) cleanup(false);
-        }
-
-        function onKeyDown(event) {
-          if (event.key === 'Escape') cleanup(false);
-        }
-
-        permissionModal.hidden = false;
-        permissionModal.setAttribute('aria-hidden', 'false');
-        permissionAllowBtn.addEventListener('click', onAllow);
-        permissionDenyBtn.addEventListener('click', onDeny);
-        permissionModal.addEventListener('click', onBackdrop);
-        document.addEventListener('keydown', onKeyDown);
-        try { permissionAllowBtn.focus({ preventScroll: true }); } catch (_) { permissionAllowBtn.focus(); }
-      });
-    }
-
-    async function tryRevokeGeolocationPermissionForNextClick() {
-      if (!navigator.permissions || typeof navigator.permissions.revoke !== 'function') return false;
-      try {
-        await navigator.permissions.revoke({ name: 'geolocation' });
-        return true;
-      } catch (_) {
-        return false;
-      }
-    }
-
-    function finishTracking(message) {
-      stopActiveWatch();
-      resetButton();
-      if (message) showLocationToast(message, 2200);
-    }
-
-    function getAccuracy(position) {
-      const accuracy = Number(position && position.coords && position.coords.accuracy);
-      return Number.isFinite(accuracy) ? accuracy : Infinity;
-    }
-
-    function formatAccuracy(accuracy) {
-      if (!Number.isFinite(accuracy)) return '정확도 확인 불가';
-      if (accuracy >= 1000) return '오차 약 ' + (accuracy / 1000).toFixed(1) + 'km';
-      return '오차 약 ' + Math.round(accuracy) + 'm';
-    }
-
-    function getFlyHeight(accuracy) {
-      if (!Number.isFinite(accuracy)) return 7000;
-      if (accuracy <= 100) return 3500;
-      if (accuracy <= 500) return 7000;
-      if (accuracy <= 2000) return 16000;
-      if (accuracy <= 10000) return 60000;
-      return 140000;
-    }
-
-    function getDistanceMeters(a, b) {
-      if (!a || !b) return Infinity;
-      const lat1 = Number(a.coords && a.coords.latitude);
-      const lon1 = Number(a.coords && a.coords.longitude);
-      const lat2 = Number(b.coords && b.coords.latitude);
-      const lon2 = Number(b.coords && b.coords.longitude);
-      if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Infinity;
-      const rad = Math.PI / 180;
-      const dLat = (lat2 - lat1) * rad;
-      const dLon = (lon2 - lon1) * rad;
-      const s1 = Math.sin(dLat / 2);
-      const s2 = Math.sin(dLon / 2);
-      const h = s1 * s1 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * s2 * s2;
-      return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-    }
-
-    function isBetterPosition(next, best) {
-      if (!best) return true;
-      const nextAccuracy = getAccuracy(next);
-      const bestAccuracy = getAccuracy(best);
-      const newer = Number(next.timestamp || Date.now()) > Number(best.timestamp || 0);
-      if (Number.isFinite(nextAccuracy) && !Number.isFinite(bestAccuracy)) return true;
-      if (nextAccuracy <= Math.max(25, bestAccuracy * 0.72)) return true;
-      if (nextAccuracy < bestAccuracy && getDistanceMeters(next, best) >= Math.max(20, bestAccuracy * 0.15)) return true;
-      if (newer && Math.abs(nextAccuracy - bestAccuracy) <= 15 && getDistanceMeters(next, best) >= 30) return true;
-      return false;
-    }
-
-    function doFlyTo(latitude, longitude, accuracy) {
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-        showLocationToast('현재 위치 좌표를 확인하지 못했습니다.');
-        return;
-      }
-      window._locationFlyActive = true;
-      clearTimeout(activeFlyTimer);
-      activeFlyTimer = setTimeout(() => { window._locationFlyActive = false; }, 8000);
-      const done = () => {
-        window._locationFlyActive = false;
-        clearTimeout(activeFlyTimer);
-        activeFlyTimer = null;
-      };
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, getFlyHeight(accuracy)),
-        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-        duration: 1.05,
-        complete: done,
-        cancel: done,
-      });
-      viewer.scene.requestRender();
-    }
-
-    function getBrowserPosition(options) {
-      return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) {
-          reject(new Error('geolocation-unsupported'));
-          return;
-        }
-        navigator.geolocation.getCurrentPosition(resolve, reject, options);
-      });
-    }
-
-    async function getPermissionState() {
-      if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
-      try {
-        const result = await navigator.permissions.query({ name: 'geolocation' });
-        return result && result.state ? result.state : 'unknown';
-      } catch (_) {
-        return 'unknown';
-      }
-    }
-
-    async function getCurrentPositionFresh() {
-      const isMobile = isMobileDevice();
-      const permissionState = await getPermissionState();
-      if (permissionState === 'prompt') {
-        showLocationToast('위치 권한을 허용해 주세요.', 2600);
-      } else if (permissionState === 'granted') {
-        showLocationToast('최신 위치를 새로 요청 중...', 2200);
-      }
-
-      const freshOptions = {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: isMobile ? 15000 : 25000,
-      };
-
-      try {
-        return await getBrowserPosition(freshOptions);
-      } catch (firstError) {
-        const denied = firstError && firstError.code === 1;
-        if (denied || !navigator.geolocation) throw firstError;
-        console.warn('fresh current location request failed, retrying with relaxed options:', firstError);
-        showLocationToast('PC 위치를 다시 확인 중...', 2600);
-        return getBrowserPosition({ enableHighAccuracy: false, maximumAge: 0, timeout: 25000 });
-      }
-    }
-
-    function refreshCurrentPositionAfterPermission(initialPosition) {
-      return new Promise(resolve => {
-        if (!navigator.geolocation) {
-          resolve(initialPosition || null);
-          return;
-        }
-
-        const isMobile = isMobileDevice();
-        const options = {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: isMobile ? 10000 : 20000,
-        };
-        const maxTrackMs = isMobile ? 7000 : 15000;
-        const targetAccuracy = isMobile ? 35 : 80;
-        let bestPosition = initialPosition || null;
-        let settled = false;
-
-        function settle(position) {
-          if (settled) return;
-          settled = true;
-          stopActiveWatch();
-          resolve(position || bestPosition);
-        }
-
-        activeWatchId = navigator.geolocation.watchPosition(position => {
-          const accuracy = getAccuracy(position);
-          if (isBetterPosition(position, bestPosition)) {
-            bestPosition = position;
-            const coords = position.coords || {};
-            doFlyTo(Number(coords.latitude), Number(coords.longitude), accuracy);
-            showLocationToast('새 위치 추적 중... ' + formatAccuracy(accuracy), 2400);
-          }
-          if (accuracy <= targetAccuracy) {
-            settle(bestPosition || position);
-          }
-        }, () => {
-          settle(bestPosition);
-        }, options);
-
-        activeTrackingTimer = setTimeout(() => settle(bestPosition), maxTrackMs);
-      });
-    }
-
-    btn.addEventListener('click', async event => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (btn.disabled) return;
+    btn.addEventListener('click', () => {
       if (!navigator.geolocation) {
         alert('이 브라우저는 현재 위치 기능을 지원하지 않습니다.');
         return;
       }
-
-      const consentGranted = await requestPcLocationConsent();
-      if (!consentGranted) {
-        showLocationToast('위치 접근이 취소되었습니다.', 2000);
-        return;
-      }
-
-      stopActiveWatch();
       btn.disabled = true;
-      btn.classList.add('is-loading');
-      showLocationToast('위치 권한 및 최신 위치 확인 중...', 2600);
+      // 안전 타이머: complete 콜백 미발동 시에도 반드시 버튼 복구
+      const safetyTimer = setTimeout(() => { btn.disabled = false; }, 12000);
 
-      try {
-        const firstPosition = await getCurrentPositionFresh();
-        if (!firstPosition) throw new Error('geolocation-empty');
-        const firstCoords = firstPosition.coords || {};
-        doFlyTo(Number(firstCoords.latitude), Number(firstCoords.longitude), getAccuracy(firstPosition));
+      navigator.geolocation.getCurrentPosition(position => {
+        const { latitude, longitude, accuracy } = position.coords;
 
-        const position = await refreshCurrentPositionAfterPermission(firstPosition);
-        const finalPosition = position || firstPosition;
-        const { latitude, longitude } = finalPosition.coords || {};
-        doFlyTo(Number(latitude), Number(longitude), getAccuracy(finalPosition));
-        const accuracy = getAccuracy(finalPosition);
-        if (!isMobileDevice()) {
-          await tryRevokeGeolocationPermissionForNextClick();
+        // 정확도 낮음 안내 패널 (PC 환경에서 Wi-Fi/IP 측위 오차 안내)
+        const accuracyPanel = document.getElementById('location-accuracy-panel');
+        const accuracyText = document.getElementById('location-accuracy-text');
+        if (accuracyPanel && accuracyText) {
+          if (accuracy > 3000) {
+            accuracyText.textContent = `현재 위치 오차 약 ${Math.round(accuracy / 1000)}km — 실제 위치와 다를 수 있습니다.`;
+            accuracyPanel.style.bottom = '210px';
+            accuracyPanel.classList.add('open');
+            clearTimeout(accuracyPanel._hideTimer);
+            accuracyPanel._hideTimer = setTimeout(() => accuracyPanel.classList.remove('open'), 7000);
+          } else {
+            accuracyPanel.classList.remove('open');
+          }
         }
-        if (!isMobileDevice() && Number.isFinite(accuracy) && accuracy > 1000) {
-          finishTracking('PC 위치 오차가 큽니다. ' + formatAccuracy(accuracy));
+
+        // 모바일: flyTo 중 syncTopDownCamera(setView) 개입으로 complete 미발동 방지
+        // → 비행 시작 플래그 설정 후 setView로 즉시 이동
+        const isMobile = window.matchMedia('(max-width: 768px)').matches;
+        if (isMobile) {
+          // 모바일: 플래그로 syncTopDownCamera 차단 후 setView 사용
+          window._locationFlyActive = true;
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+            duration: 1.4,
+            complete: () => {
+              window._locationFlyActive = false;
+              clearTimeout(safetyTimer);
+              btn.disabled = false;
+            },
+            cancel: () => {
+              window._locationFlyActive = false;
+              clearTimeout(safetyTimer);
+              btn.disabled = false;
+            },
+          });
         } else {
-          finishTracking('현재 위치로 이동했습니다. ' + formatAccuracy(accuracy));
+          // PC: 모바일과 동일하게 플래그 설정 → syncTopDownCamera 개입 차단
+          window._locationFlyActive = true;
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+            duration: 1.6,
+            complete: () => {
+              window._locationFlyActive = false;
+              clearTimeout(safetyTimer);
+              btn.disabled = false;
+            },
+            cancel: () => {
+              window._locationFlyActive = false;
+              clearTimeout(safetyTimer);
+              btn.disabled = false;
+            },
+          });
         }
-      } catch (error) {
-        resetButton();
-        stopActiveWatch();
-        console.warn('current location failed:', error);
-        if (error && error.code === 1) {
-          alert('현재 위치 권한이 차단되어 있습니다. 브라우저 주소창 왼쪽의 사이트 설정에서 위치 권한을 초기화하거나 허용해 주세요. 이미 차단된 권한은 코드로 다시 팝업을 띄울 수 없습니다.');
-        } else if (error && error.code === 3) {
-          alert('현재 위치 확인 시간이 초과되었습니다. PC에서는 브라우저 위치 권한과 Windows 위치 서비스가 켜져 있는지 확인해 주세요.');
-        } else {
-          alert('현재 위치를 가져오지 못했습니다. 위치 권한 또는 PC의 위치 서비스를 확인해 주세요.');
-        }
-      }
+      }, error => {
+        clearTimeout(safetyTimer);
+        btn.disabled = false;
+        alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
+        console.warn(error);
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
     });
   }
 

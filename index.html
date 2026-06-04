@@ -172,8 +172,6 @@
       backdrop-filter: blur(8px);
     }
     .tool-circle:hover, #globe-home-btn:hover { transform: translateY(-1px) scale(1.03); background: rgba(33,54,94,.96); }
-    .tool-circle:disabled { cursor: wait; opacity: .72; transform: none; }
-    .tool-circle.is-loading svg { animation: spin .9s linear infinite; }
     .tool-panel {
       position: fixed; right: 74px; background: rgba(15,23,42,.94); color: #e5eefc;
       border-radius: 16px; box-shadow: 0 16px 38px rgba(0,0,0,.35); backdrop-filter: blur(10px);
@@ -252,73 +250,6 @@
       opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease;
     }
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-
-    .location-permission-modal {
-      position: fixed;
-      inset: 0;
-      z-index: 650;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 18px;
-      background: rgba(2, 6, 23, 0.54);
-      backdrop-filter: blur(8px);
-    }
-    .location-permission-modal[hidden] { display: none !important; }
-    .location-permission-card {
-      width: min(360px, calc(100vw - 36px));
-      border-radius: 18px;
-      background: rgba(15, 23, 42, 0.97);
-      color: #e5eefc;
-      border: 1px solid rgba(148, 163, 184, 0.22);
-      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.46);
-      padding: 20px;
-    }
-    .location-permission-title {
-      margin: 0 0 8px;
-      font-size: 17px;
-      font-weight: 900;
-      letter-spacing: -0.2px;
-    }
-    .location-permission-desc {
-      margin: 0;
-      color: #cbd5e1;
-      font-size: 13px;
-      line-height: 1.58;
-      word-break: keep-all;
-    }
-    .location-permission-note {
-      margin-top: 10px;
-      color: #93c5fd;
-      font-size: 11px;
-      line-height: 1.5;
-      word-break: keep-all;
-    }
-    .location-permission-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      margin-top: 18px;
-    }
-    .location-permission-actions button {
-      border: 0;
-      border-radius: 11px;
-      padding: 10px 15px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 900;
-    }
-    #location-permission-deny {
-      background: rgba(255, 255, 255, 0.09);
-      color: #e5eefc;
-    }
-    #location-permission-allow {
-      background: linear-gradient(180deg, #2563eb, #1d4ed8);
-      color: #fff;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
-    }
-
 
     @media (max-width: 768px) {
       /* 검색창 */
@@ -483,19 +414,6 @@
   </button>
   <div id="toast">링크가 복사되었습니다.</div>
 
-
-  <div id="location-permission-modal" class="location-permission-modal" hidden aria-hidden="true">
-    <div class="location-permission-card" role="dialog" aria-modal="true" aria-labelledby="location-permission-title">
-      <h2 id="location-permission-title" class="location-permission-title">현재 위치 권한 요청</h2>
-      <p class="location-permission-desc">내 위치로 이동하려면 위치 접근을 허용해 주세요. 허용을 누를 때마다 PC에서도 새 위치 추적을 다시 시작합니다.</p>
-      <div class="location-permission-note">브라우저 기본 권한창은 이미 허용/차단된 사이트에서 매번 강제로 다시 띄울 수 없어, 사이트 내부 확인창을 매번 표시합니다.</div>
-      <div class="location-permission-actions">
-        <button id="location-permission-deny" type="button">차단</button>
-        <button id="location-permission-allow" type="button">허용</button>
-      </div>
-    </div>
-  </div>
-
   <div id="mouse-info">
     <div class="mi-row"><span class="mi-v" id="mi-place" style="font-size:12px;max-width:240px;white-space:normal;line-height:1.4">위치 확인 중...</span></div>
   </div>
@@ -555,6 +473,15 @@
     <button id="my-location-btn" class="tool-circle" type="button" title="내 위치로 이동">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path><circle cx="12" cy="12" r="9"></circle></svg>
     </button>
+    <div id="location-accuracy-panel" class="tool-panel">
+      <div class="panel-title">&#128205; 위치 정확도 낮음</div>
+      <div style="font-size:11px; color:#fbbf24; margin-bottom:8px;" id="location-accuracy-text"></div>
+      <div style="font-size:11px; color:#94a3b8; line-height:1.6;">
+        PC는 GPS가 없어 Wi-Fi&#183;IP 기반으로 위치를 추정합니다.<br>
+        정확도를 높이려면 <strong style="color:#e5eefc;">Wi-Fi를 켜두세요.</strong><br>
+        랜선 변경 후 IP가 바뀐 경우 Google 서버에서<br>자동 보정될 때까지 시간이 걸릴 수 있습니다.
+      </div>
+    </div>
     <button id="style-toggle-btn" class="tool-circle" type="button" title="지도 스타일 전환">
       <svg viewBox="0 0 24 24"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21 1 6"></polygon><line x1="8" y1="3" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="21"></line></svg>
     </button>
@@ -583,6 +510,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260604-location-permission-modal-v4"></script>
+  <script src="js/app.js?v=20260430-zoom-buttons-v1"></script>
 </body>
 </html>
