@@ -3219,6 +3219,9 @@ out geom qt;`;
   function wireCurrentLocation(viewer) {
     const btn = document.getElementById('my-location-btn');
     const toast = document.getElementById('toast');
+    const permissionModal = document.getElementById('location-permission-modal');
+    const permissionAllowBtn = document.getElementById('location-permission-allow');
+    const permissionDenyBtn = document.getElementById('location-permission-deny');
     let toastTimer = null;
     let activeWatchId = null;
     let activeTrackingTimer = null;
@@ -3245,6 +3248,71 @@ out geom qt;`;
     function resetButton() {
       btn.disabled = false;
       btn.classList.remove('is-loading');
+    }
+
+
+    function requestPcLocationConsent() {
+      if (isMobileDevice() || !permissionModal || !permissionAllowBtn || !permissionDenyBtn) {
+        return Promise.resolve(true);
+      }
+
+      return new Promise(resolve => {
+        let settled = false;
+        const previousFocus = document.activeElement;
+
+        function cleanup(allowed) {
+          if (settled) return;
+          settled = true;
+          permissionModal.hidden = true;
+          permissionModal.setAttribute('aria-hidden', 'true');
+          permissionAllowBtn.removeEventListener('click', onAllow);
+          permissionDenyBtn.removeEventListener('click', onDeny);
+          permissionModal.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKeyDown);
+          if (previousFocus && typeof previousFocus.focus === 'function') {
+            try { previousFocus.focus({ preventScroll: true }); } catch (_) { previousFocus.focus(); }
+          }
+          resolve(allowed);
+        }
+
+        function onAllow(event) {
+          event.preventDefault();
+          event.stopPropagation();
+          cleanup(true);
+        }
+
+        function onDeny(event) {
+          event.preventDefault();
+          event.stopPropagation();
+          cleanup(false);
+        }
+
+        function onBackdrop(event) {
+          if (event.target === permissionModal) cleanup(false);
+        }
+
+        function onKeyDown(event) {
+          if (event.key === 'Escape') cleanup(false);
+        }
+
+        permissionModal.hidden = false;
+        permissionModal.setAttribute('aria-hidden', 'false');
+        permissionAllowBtn.addEventListener('click', onAllow);
+        permissionDenyBtn.addEventListener('click', onDeny);
+        permissionModal.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKeyDown);
+        try { permissionAllowBtn.focus({ preventScroll: true }); } catch (_) { permissionAllowBtn.focus(); }
+      });
+    }
+
+    async function tryRevokeGeolocationPermissionForNextClick() {
+      if (!navigator.permissions || typeof navigator.permissions.revoke !== 'function') return false;
+      try {
+        await navigator.permissions.revoke({ name: 'geolocation' });
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
 
     function finishTracking(message) {
@@ -3423,6 +3491,12 @@ out geom qt;`;
         return;
       }
 
+      const consentGranted = await requestPcLocationConsent();
+      if (!consentGranted) {
+        showLocationToast('위치 접근이 취소되었습니다.', 2000);
+        return;
+      }
+
       stopActiveWatch();
       btn.disabled = true;
       btn.classList.add('is-loading');
@@ -3439,6 +3513,9 @@ out geom qt;`;
         const { latitude, longitude } = finalPosition.coords || {};
         doFlyTo(Number(latitude), Number(longitude), getAccuracy(finalPosition));
         const accuracy = getAccuracy(finalPosition);
+        if (!isMobileDevice()) {
+          await tryRevokeGeolocationPermissionForNextClick();
+        }
         if (!isMobileDevice() && Number.isFinite(accuracy) && accuracy > 1000) {
           finishTracking('PC 위치 오차가 큽니다. ' + formatAccuracy(accuracy));
         } else {
@@ -3449,7 +3526,7 @@ out geom qt;`;
         stopActiveWatch();
         console.warn('current location failed:', error);
         if (error && error.code === 1) {
-          alert('현재 위치 권한이 차단되어 있습니다. 브라우저 주소창 왼쪽의 사이트 설정에서 위치 권한을 허용해 주세요.');
+          alert('현재 위치 권한이 차단되어 있습니다. 브라우저 주소창 왼쪽의 사이트 설정에서 위치 권한을 초기화하거나 허용해 주세요. 이미 차단된 권한은 코드로 다시 팝업을 띄울 수 없습니다.');
         } else if (error && error.code === 3) {
           alert('현재 위치 확인 시간이 초과되었습니다. PC에서는 브라우저 위치 권한과 Windows 위치 서비스가 켜져 있는지 확인해 주세요.');
         } else {
