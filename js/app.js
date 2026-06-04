@@ -3253,33 +3253,11 @@ out geom qt;`;
       }
       btn.disabled = true;
 
-      // watchPosition으로 첫 번째 정확한 위치를 받은 후 즉시 중단
       // maximumAge: 0 → 캐시 사용 안 함, 항상 새 위치 요청
-      let watchId = null;
-      let settled = false;
-      const giveUpTimer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-          btn.disabled = false;
-          alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
-        }
-      }, 20000);
-
-      watchId = navigator.geolocation.watchPosition(position => {
-        const { latitude, longitude, accuracy } = position.coords;
-        // 정확도 300m 이하일 때 확정 (GPS 정착 전 큰 오차 무시)
-        if (accuracy > 300 && !settled) return;
-        if (settled) return;
-        settled = true;
-        clearTimeout(giveUpTimer);
-        navigator.geolocation.clearWatch(watchId);
+      navigator.geolocation.getCurrentPosition(position => {
+        const { latitude, longitude } = position.coords;
         doFlyTo(latitude, longitude);
       }, error => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(giveUpTimer);
-        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
         btn.disabled = false;
         alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
         console.warn(error);
