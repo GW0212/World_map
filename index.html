@@ -172,6 +172,8 @@
       backdrop-filter: blur(8px);
     }
     .tool-circle:hover, #globe-home-btn:hover { transform: translateY(-1px) scale(1.03); background: rgba(33,54,94,.96); }
+    .tool-circle:disabled { cursor: wait; opacity: .72; transform: none; }
+    .tool-circle.is-loading svg { animation: spin .9s linear infinite; }
     .tool-panel {
       position: fixed; right: 74px; background: rgba(15,23,42,.94); color: #e5eefc;
       border-radius: 16px; box-shadow: 0 16px 38px rgba(0,0,0,.35); backdrop-filter: blur(10px);
@@ -501,6 +503,6 @@
   <script src="data/subway_stations_kr.js?v=20260429-subway-v47-full"></script>
   <script src="data/subway_regions_kr.js?v=20260429-subway-v47-full"></script>
   <script src="js/search-engine.js?v=20260409c"></script>
-  <script src="js/app.js?v=20260430-zoom-buttons-v1"></script>
+  <script src="js/app.js?v=20260604-location-pc-realtime-v2"></script>
 </body>
 </html>

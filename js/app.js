@@ -3218,38 +3218,243 @@ out geom qt;`;
 
   function wireCurrentLocation(viewer) {
     const btn = document.getElementById('my-location-btn');
+    const toast = document.getElementById('toast');
+    let toastTimer = null;
+    let activeWatchId = null;
+    let activeTrackingTimer = null;
+    let activeFlyTimer = null;
+    if (!btn) return;
 
-    function doFlyTo(latitude, longitude) {
+    function showLocationToast(message, duration = 1800) {
+      if (!toast) return;
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
+    }
+
+    function stopActiveWatch() {
+      if (activeWatchId !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(activeWatchId);
+        activeWatchId = null;
+      }
+      clearTimeout(activeTrackingTimer);
+      activeTrackingTimer = null;
+    }
+
+    function resetButton() {
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+    }
+
+    function finishTracking(message) {
+      stopActiveWatch();
+      resetButton();
+      if (message) showLocationToast(message, 2200);
+    }
+
+    function getAccuracy(position) {
+      const accuracy = Number(position && position.coords && position.coords.accuracy);
+      return Number.isFinite(accuracy) ? accuracy : Infinity;
+    }
+
+    function formatAccuracy(accuracy) {
+      if (!Number.isFinite(accuracy)) return '정확도 확인 불가';
+      if (accuracy >= 1000) return '오차 약 ' + (accuracy / 1000).toFixed(1) + 'km';
+      return '오차 약 ' + Math.round(accuracy) + 'm';
+    }
+
+    function getFlyHeight(accuracy) {
+      if (!Number.isFinite(accuracy)) return 7000;
+      if (accuracy <= 100) return 3500;
+      if (accuracy <= 500) return 7000;
+      if (accuracy <= 2000) return 16000;
+      if (accuracy <= 10000) return 60000;
+      return 140000;
+    }
+
+    function getDistanceMeters(a, b) {
+      if (!a || !b) return Infinity;
+      const lat1 = Number(a.coords && a.coords.latitude);
+      const lon1 = Number(a.coords && a.coords.longitude);
+      const lat2 = Number(b.coords && b.coords.latitude);
+      const lon2 = Number(b.coords && b.coords.longitude);
+      if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Infinity;
+      const rad = Math.PI / 180;
+      const dLat = (lat2 - lat1) * rad;
+      const dLon = (lon2 - lon1) * rad;
+      const s1 = Math.sin(dLat / 2);
+      const s2 = Math.sin(dLon / 2);
+      const h = s1 * s1 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * s2 * s2;
+      return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    }
+
+    function isBetterPosition(next, best) {
+      if (!best) return true;
+      const nextAccuracy = getAccuracy(next);
+      const bestAccuracy = getAccuracy(best);
+      const newer = Number(next.timestamp || Date.now()) > Number(best.timestamp || 0);
+      if (Number.isFinite(nextAccuracy) && !Number.isFinite(bestAccuracy)) return true;
+      if (nextAccuracy <= Math.max(25, bestAccuracy * 0.72)) return true;
+      if (nextAccuracy < bestAccuracy && getDistanceMeters(next, best) >= Math.max(20, bestAccuracy * 0.15)) return true;
+      if (newer && Math.abs(nextAccuracy - bestAccuracy) <= 15 && getDistanceMeters(next, best) >= 30) return true;
+      return false;
+    }
+
+    function doFlyTo(latitude, longitude, accuracy) {
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        showLocationToast('현재 위치 좌표를 확인하지 못했습니다.');
+        return;
+      }
       window._locationFlyActive = true;
-      const safetyTimer = setTimeout(() => {
+      clearTimeout(activeFlyTimer);
+      activeFlyTimer = setTimeout(() => { window._locationFlyActive = false; }, 8000);
+      const done = () => {
         window._locationFlyActive = false;
-        btn.disabled = false;
-      }, 15000);
-      const done = () => { window._locationFlyActive = false; clearTimeout(safetyTimer); btn.disabled = false; };
+        clearTimeout(activeFlyTimer);
+        activeFlyTimer = null;
+      };
       viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, getFlyHeight(accuracy)),
         orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-        duration: 1.5,
+        duration: 1.05,
         complete: done,
         cancel: done,
       });
+      viewer.scene.requestRender();
     }
 
-    btn.addEventListener('click', () => {
+    function getBrowserPosition(options) {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('geolocation-unsupported'));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      });
+    }
+
+    async function getCurrentPositionRobustly() {
+      const isMobile = isMobileDevice();
+      const firstOptions = {
+        enableHighAccuracy: isMobile,
+        maximumAge: isMobile ? 30000 : 0,
+        timeout: isMobile ? 12000 : 8000,
+      };
+      try {
+        return await getBrowserPosition(firstOptions);
+      } catch (firstError) {
+        // PC는 GPS가 없거나 Wi-Fi 위치 제공이 느려 highAccuracy/짧은 timeout에서 실패하는 경우가 잦다.
+        // 권한 거부가 아니라면 저정밀·긴 timeout으로 한 번 더 시도한다.
+        const denied = firstError && firstError.code === 1;
+        if (denied || !navigator.geolocation) throw firstError;
+        console.warn('current location first attempt failed, retrying with relaxed options:', firstError);
+        return getBrowserPosition({ enableHighAccuracy: false, maximumAge: 0, timeout: 20000 });
+      }
+    }
+
+    function trackCurrentPositionRealtime() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('geolocation-unsupported'));
+          return;
+        }
+
+        const isMobile = isMobileDevice();
+        const options = {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: isMobile ? 15000 : 30000,
+        };
+        const minTrackMs = isMobile ? 3500 : 7000;
+        const maxTrackMs = isMobile ? 12000 : 30000;
+        const targetAccuracy = isMobile ? 35 : 80;
+        const startedAt = Date.now();
+        let bestPosition = null;
+        let settled = false;
+        let receivedFirstFix = false;
+
+        function settle(position) {
+          if (settled) return;
+          settled = true;
+          stopActiveWatch();
+          resolve(position || bestPosition);
+        }
+
+        activeWatchId = navigator.geolocation.watchPosition(position => {
+          receivedFirstFix = true;
+          const accuracy = getAccuracy(position);
+          if (isBetterPosition(position, bestPosition)) {
+            bestPosition = position;
+            const coords = position.coords || {};
+            doFlyTo(Number(coords.latitude), Number(coords.longitude), accuracy);
+            showLocationToast('실시간 위치 갱신 중... ' + formatAccuracy(accuracy), 2600);
+          }
+
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= minTrackMs && accuracy <= targetAccuracy) {
+            settle(bestPosition || position);
+          }
+        }, error => {
+          if (bestPosition) {
+            settle(bestPosition);
+            return;
+          }
+          if (!receivedFirstFix) {
+            settle(null);
+            reject(error);
+          }
+        }, options);
+
+        activeTrackingTimer = setTimeout(() => {
+          settle(bestPosition);
+        }, maxTrackMs);
+      });
+    }
+
+    btn.addEventListener('click', async event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (btn.disabled) return;
       if (!navigator.geolocation) {
         alert('이 브라우저는 현재 위치 기능을 지원하지 않습니다.');
         return;
       }
-      btn.disabled = true;
 
-      navigator.geolocation.getCurrentPosition(position => {
-        const { latitude, longitude } = position.coords;
-        doFlyTo(latitude, longitude);
-      }, error => {
-        btn.disabled = false;
-        alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
-        console.warn(error);
-      }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 });
+      stopActiveWatch();
+      btn.disabled = true;
+      btn.classList.add('is-loading');
+      showLocationToast('실시간 위치 추적 중...', 2600);
+
+      try {
+        const position = await trackCurrentPositionRealtime();
+        if (!position) {
+          const fallback = await getCurrentPositionRobustly();
+          const { latitude, longitude } = fallback.coords || {};
+          doFlyTo(Number(latitude), Number(longitude), getAccuracy(fallback));
+          finishTracking('현재 위치로 이동했습니다. ' + formatAccuracy(getAccuracy(fallback)));
+          return;
+        }
+        const { latitude, longitude } = position.coords || {};
+        doFlyTo(Number(latitude), Number(longitude), getAccuracy(position));
+        const accuracy = getAccuracy(position);
+        if (!isMobileDevice() && Number.isFinite(accuracy) && accuracy > 1000) {
+          finishTracking('PC 위치 오차가 큽니다. ' + formatAccuracy(accuracy));
+        } else {
+          finishTracking('현재 위치로 이동했습니다. ' + formatAccuracy(accuracy));
+        }
+      } catch (error) {
+        resetButton();
+        stopActiveWatch();
+        console.warn('current location failed:', error);
+        if (error && error.code === 1) {
+          alert('현재 위치 권한이 차단되어 있습니다. 브라우저 주소창 왼쪽의 사이트 설정에서 위치 권한을 허용해 주세요.');
+        } else if (error && error.code === 3) {
+          alert('현재 위치 확인 시간이 초과되었습니다. PC에서는 브라우저 위치 권한과 Windows 위치 서비스가 켜져 있는지 확인해 주세요.');
+        } else {
+          alert('현재 위치를 가져오지 못했습니다. 위치 권한 또는 PC의 위치 서비스를 확인해 주세요.');
+        }
+      }
     });
   }
 
