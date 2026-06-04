@@ -3218,53 +3218,72 @@ out geom qt;`;
 
   function wireCurrentLocation(viewer) {
     const btn = document.getElementById('my-location-btn');
+
+    function doFlyTo(latitude, longitude) {
+      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      const safetyTimer = setTimeout(() => {
+        window._locationFlyActive = false;
+        btn.disabled = false;
+      }, 15000);
+
+      if (isMobile) {
+        window._locationFlyActive = true;
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+          duration: 1.4,
+          complete: () => { window._locationFlyActive = false; clearTimeout(safetyTimer); btn.disabled = false; },
+          cancel: () => { window._locationFlyActive = false; clearTimeout(safetyTimer); btn.disabled = false; },
+        });
+      } else {
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+          duration: 1.6,
+          complete: () => { clearTimeout(safetyTimer); btn.disabled = false; },
+          cancel: () => { clearTimeout(safetyTimer); btn.disabled = false; },
+        });
+      }
+    }
+
     btn.addEventListener('click', () => {
       if (!navigator.geolocation) {
         alert('이 브라우저는 현재 위치 기능을 지원하지 않습니다.');
         return;
       }
       btn.disabled = true;
-      // 안전 타이머: complete 콜백 미발동 시에도 반드시 버튼 복구
-      const safetyTimer = setTimeout(() => { btn.disabled = false; }, 12000);
 
-      navigator.geolocation.getCurrentPosition(position => {
-        const { latitude, longitude } = position.coords;
-        // 모바일: flyTo 중 syncTopDownCamera(setView) 개입으로 complete 미발동 방지
-        // → 비행 시작 플래그 설정 후 setView로 즉시 이동
-        const isMobile = window.matchMedia('(max-width: 768px)').matches;
-        if (isMobile) {
-          // 모바일: 플래그로 syncTopDownCamera 차단 후 setView 사용
-          window._locationFlyActive = true;
-          viewer.camera.flyTo({
-            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
-            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-            duration: 1.4,
-            complete: () => {
-              window._locationFlyActive = false;
-              clearTimeout(safetyTimer);
-              btn.disabled = false;
-            },
-            cancel: () => {
-              window._locationFlyActive = false;
-              clearTimeout(safetyTimer);
-              btn.disabled = false;
-            },
-          });
-        } else {
-          viewer.camera.flyTo({
-            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
-            orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-            duration: 1.6,
-            complete: () => { clearTimeout(safetyTimer); btn.disabled = false; },
-            cancel: () => { clearTimeout(safetyTimer); btn.disabled = false; },
-          });
+      // watchPosition으로 첫 번째 정확한 위치를 받은 후 즉시 중단
+      // maximumAge: 0 → 캐시 사용 안 함, 항상 새 위치 요청
+      let watchId = null;
+      let settled = false;
+      const giveUpTimer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+          btn.disabled = false;
+          alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
         }
+      }, 20000);
+
+      watchId = navigator.geolocation.watchPosition(position => {
+        const { latitude, longitude, accuracy } = position.coords;
+        // 정확도 300m 이하일 때 확정 (GPS 정착 전 큰 오차 무시)
+        if (accuracy > 300 && !settled) return;
+        if (settled) return;
+        settled = true;
+        clearTimeout(giveUpTimer);
+        navigator.geolocation.clearWatch(watchId);
+        doFlyTo(latitude, longitude);
       }, error => {
-        clearTimeout(safetyTimer);
+        if (settled) return;
+        settled = true;
+        clearTimeout(giveUpTimer);
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
         btn.disabled = false;
         alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
         console.warn(error);
-      }, { enableHighAccuracy: true, maximumAge: 15000, timeout: 10000 });
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
     });
   }
 
