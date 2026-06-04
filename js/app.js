@@ -3255,7 +3255,6 @@ out geom qt;`;
 
       // watchPosition으로 실시간 추적 시작
       // 첫 번째 콜백은 캐시된 위치일 수 있으므로 스킵, 두 번째부터 사용
-      let callCount = 0;
       let watchId = null;
       const giveUpTimer = setTimeout(() => {
         if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
@@ -3264,8 +3263,6 @@ out geom qt;`;
       }, 15000);
 
       watchId = navigator.geolocation.watchPosition(position => {
-        callCount++;
-        if (callCount < 2) return; // 첫 번째(캐시 가능성) 스킵
         clearTimeout(giveUpTimer);
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
