@@ -3334,29 +3334,46 @@ out geom qt;`;
       });
     }
 
-    async function getCurrentPositionRobustly() {
-      const isMobile = isMobileDevice();
-      const firstOptions = {
-        enableHighAccuracy: isMobile,
-        maximumAge: isMobile ? 30000 : 0,
-        timeout: isMobile ? 12000 : 8000,
-      };
+    async function getPermissionState() {
+      if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
       try {
-        return await getBrowserPosition(firstOptions);
-      } catch (firstError) {
-        // PC는 GPS가 없거나 Wi-Fi 위치 제공이 느려 highAccuracy/짧은 timeout에서 실패하는 경우가 잦다.
-        // 권한 거부가 아니라면 저정밀·긴 timeout으로 한 번 더 시도한다.
-        const denied = firstError && firstError.code === 1;
-        if (denied || !navigator.geolocation) throw firstError;
-        console.warn('current location first attempt failed, retrying with relaxed options:', firstError);
-        return getBrowserPosition({ enableHighAccuracy: false, maximumAge: 0, timeout: 20000 });
+        const result = await navigator.permissions.query({ name: 'geolocation' });
+        return result && result.state ? result.state : 'unknown';
+      } catch (_) {
+        return 'unknown';
       }
     }
 
-    function trackCurrentPositionRealtime() {
-      return new Promise((resolve, reject) => {
+    async function getCurrentPositionFresh() {
+      const isMobile = isMobileDevice();
+      const permissionState = await getPermissionState();
+      if (permissionState === 'prompt') {
+        showLocationToast('위치 권한을 허용해 주세요.', 2600);
+      } else if (permissionState === 'granted') {
+        showLocationToast('최신 위치를 새로 요청 중...', 2200);
+      }
+
+      const freshOptions = {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: isMobile ? 15000 : 25000,
+      };
+
+      try {
+        return await getBrowserPosition(freshOptions);
+      } catch (firstError) {
+        const denied = firstError && firstError.code === 1;
+        if (denied || !navigator.geolocation) throw firstError;
+        console.warn('fresh current location request failed, retrying with relaxed options:', firstError);
+        showLocationToast('PC 위치를 다시 확인 중...', 2600);
+        return getBrowserPosition({ enableHighAccuracy: false, maximumAge: 0, timeout: 25000 });
+      }
+    }
+
+    function refreshCurrentPositionAfterPermission(initialPosition) {
+      return new Promise(resolve => {
         if (!navigator.geolocation) {
-          reject(new Error('geolocation-unsupported'));
+          resolve(initialPosition || null);
           return;
         }
 
@@ -3364,15 +3381,12 @@ out geom qt;`;
         const options = {
           enableHighAccuracy: true,
           maximumAge: 0,
-          timeout: isMobile ? 15000 : 30000,
+          timeout: isMobile ? 10000 : 20000,
         };
-        const minTrackMs = isMobile ? 3500 : 7000;
-        const maxTrackMs = isMobile ? 12000 : 30000;
+        const maxTrackMs = isMobile ? 7000 : 15000;
         const targetAccuracy = isMobile ? 35 : 80;
-        const startedAt = Date.now();
-        let bestPosition = null;
+        let bestPosition = initialPosition || null;
         let settled = false;
-        let receivedFirstFix = false;
 
         function settle(position) {
           if (settled) return;
@@ -3382,33 +3396,21 @@ out geom qt;`;
         }
 
         activeWatchId = navigator.geolocation.watchPosition(position => {
-          receivedFirstFix = true;
           const accuracy = getAccuracy(position);
           if (isBetterPosition(position, bestPosition)) {
             bestPosition = position;
             const coords = position.coords || {};
             doFlyTo(Number(coords.latitude), Number(coords.longitude), accuracy);
-            showLocationToast('실시간 위치 갱신 중... ' + formatAccuracy(accuracy), 2600);
+            showLocationToast('새 위치 추적 중... ' + formatAccuracy(accuracy), 2400);
           }
-
-          const elapsed = Date.now() - startedAt;
-          if (elapsed >= minTrackMs && accuracy <= targetAccuracy) {
+          if (accuracy <= targetAccuracy) {
             settle(bestPosition || position);
           }
-        }, error => {
-          if (bestPosition) {
-            settle(bestPosition);
-            return;
-          }
-          if (!receivedFirstFix) {
-            settle(null);
-            reject(error);
-          }
+        }, () => {
+          settle(bestPosition);
         }, options);
 
-        activeTrackingTimer = setTimeout(() => {
-          settle(bestPosition);
-        }, maxTrackMs);
+        activeTrackingTimer = setTimeout(() => settle(bestPosition), maxTrackMs);
       });
     }
 
@@ -3424,20 +3426,19 @@ out geom qt;`;
       stopActiveWatch();
       btn.disabled = true;
       btn.classList.add('is-loading');
-      showLocationToast('실시간 위치 추적 중...', 2600);
+      showLocationToast('위치 권한 및 최신 위치 확인 중...', 2600);
 
       try {
-        const position = await trackCurrentPositionRealtime();
-        if (!position) {
-          const fallback = await getCurrentPositionRobustly();
-          const { latitude, longitude } = fallback.coords || {};
-          doFlyTo(Number(latitude), Number(longitude), getAccuracy(fallback));
-          finishTracking('현재 위치로 이동했습니다. ' + formatAccuracy(getAccuracy(fallback)));
-          return;
-        }
-        const { latitude, longitude } = position.coords || {};
-        doFlyTo(Number(latitude), Number(longitude), getAccuracy(position));
-        const accuracy = getAccuracy(position);
+        const firstPosition = await getCurrentPositionFresh();
+        if (!firstPosition) throw new Error('geolocation-empty');
+        const firstCoords = firstPosition.coords || {};
+        doFlyTo(Number(firstCoords.latitude), Number(firstCoords.longitude), getAccuracy(firstPosition));
+
+        const position = await refreshCurrentPositionAfterPermission(firstPosition);
+        const finalPosition = position || firstPosition;
+        const { latitude, longitude } = finalPosition.coords || {};
+        doFlyTo(Number(latitude), Number(longitude), getAccuracy(finalPosition));
+        const accuracy = getAccuracy(finalPosition);
         if (!isMobileDevice() && Number.isFinite(accuracy) && accuracy > 1000) {
           finishTracking('PC 위치 오차가 큽니다. ' + formatAccuracy(accuracy));
         } else {
