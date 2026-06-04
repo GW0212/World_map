@@ -3220,30 +3220,19 @@ out geom qt;`;
     const btn = document.getElementById('my-location-btn');
 
     function doFlyTo(latitude, longitude) {
-      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      window._locationFlyActive = true;
       const safetyTimer = setTimeout(() => {
         window._locationFlyActive = false;
         btn.disabled = false;
       }, 15000);
-
-      if (isMobile) {
-        window._locationFlyActive = true;
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
-          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-          duration: 1.4,
-          complete: () => { window._locationFlyActive = false; clearTimeout(safetyTimer); btn.disabled = false; },
-          cancel: () => { window._locationFlyActive = false; clearTimeout(safetyTimer); btn.disabled = false; },
-        });
-      } else {
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
-          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
-          duration: 1.6,
-          complete: () => { clearTimeout(safetyTimer); btn.disabled = false; },
-          cancel: () => { clearTimeout(safetyTimer); btn.disabled = false; },
-        });
-      }
+      const done = () => { window._locationFlyActive = false; clearTimeout(safetyTimer); btn.disabled = false; };
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 7000),
+        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+        duration: 1.5,
+        complete: done,
+        cancel: done,
+      });
     }
 
     btn.addEventListener('click', () => {
@@ -3253,28 +3242,14 @@ out geom qt;`;
       }
       btn.disabled = true;
 
-      // watchPosition으로 실시간 추적 시작
-      // 첫 번째 콜백은 캐시된 위치일 수 있으므로 스킵, 두 번째부터 사용
-      let watchId = null;
-      const giveUpTimer = setTimeout(() => {
-        if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-        btn.disabled = false;
-        alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
-      }, 15000);
-
-      watchId = navigator.geolocation.watchPosition(position => {
-        clearTimeout(giveUpTimer);
-        navigator.geolocation.clearWatch(watchId);
-        watchId = null;
+      navigator.geolocation.getCurrentPosition(position => {
         const { latitude, longitude } = position.coords;
         doFlyTo(latitude, longitude);
       }, error => {
-        clearTimeout(giveUpTimer);
-        if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
         btn.disabled = false;
         alert('현재 위치를 가져오지 못했습니다. 위치 권한을 확인해 주세요.');
         console.warn(error);
-      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+      }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 });
     });
   }
 
